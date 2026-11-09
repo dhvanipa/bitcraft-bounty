@@ -1,0 +1,67 @@
+/*
+  bounty: a claim that the prover holds unspent Bitcraft gems worth at least
+  `threshold` BIT at one state root, made for `recipient`.
+
+  BountyClaim(state_header, recipient, threshold) says the prover knows object
+  states, each with a different tag, such that each one
+
+  - is in the created array of `state_header`, so a valid transaction made it
+    (LiveObject);
+  - is unspent there: its nullifier, H(H(obj, obj.key), "txlib-nullifier-v1")
+    as txlib.podlang computes it, is not in the nullifiers set of
+    `state_header` (LiveObject);
+  - is a gem: H(obj.type, value) is in GEM_VALUES, which holds one entry per
+    gem class of the Bitcraft plugin (module 0x54548dac8ef1...), its
+    `Is<Class>` predicate hash with its value in BIT (LiveGem);
+
+  and their values add up to at least `threshold` (GemsTotal). The tag,
+  H(obj.stable_identifier, "bitcraft-holdings-v1"), is the same for every
+  state of one object, so no object counts twice. `recipient` is the address
+  the bounty pays: it is part of the statement, so a copied proof pays the
+  same address.
+
+  GEM_VALUES is filled in by bounty.rs from its GEMS table. The
+  StateHeader record matches txlib's.
+*/
+
+record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)
+
+LiveObject(state_header StateHeader, obj, private: index, key_hash, nullifier) = AND(
+  ArrayContains(state_header.created, index, obj)
+  Hash(obj, obj.key, key_hash)
+  Hash(key_hash, "txlib-nullifier-v1", nullifier)
+  SetNotContains(state_header.nullifiers, nullifier)
+)
+
+LiveGem(state_header StateHeader, value, tag, private: obj, entry) = AND(
+  LiveObject(state_header, obj)
+  Hash(obj.type, value, entry)
+  SetContains(GEM_VALUES, entry)
+  Hash(obj.stable_identifier, "bitcraft-holdings-v1", tag)
+)
+
+// The total value of a set of live gems with distinct tags.
+GemsTotal(state_header StateHeader, total, tags) = OR(
+  GemsTotalOne(state_header, total, tags)
+  GemsTotalMore(state_header, total, tags)
+)
+
+GemsTotalOne(state_header StateHeader, total, tags, private: tag) = AND(
+  LiveGem(state_header, total, tag)
+  SetInsert({}, tag, tags)
+)
+
+// SetInsert requires the tag's prior absence: no object counts twice.
+GemsTotalMore(state_header StateHeader, total, tags,
+    private: prev_total, prev_tags, value, tag) = AND(
+  GemsTotal(state_header, prev_total, prev_tags)
+  LiveGem(state_header, value, tag)
+  Sum(prev_total, value, total)
+  SetInsert(prev_tags, tag, tags)
+)
+
+BountyClaim(state_header StateHeader, recipient, threshold, private: total, tags) = AND(
+  GemsTotal(state_header, total, tags)
+  GtEq(total, threshold)
+  Equal(recipient, recipient)
+)

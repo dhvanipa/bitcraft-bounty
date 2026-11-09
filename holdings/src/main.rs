@@ -47,6 +47,8 @@ use serde::{Deserialize, Serialize};
 use txlib::{STATE_HEADER_CREATED_SLOT, StateHeader};
 use wire_types::synchronizer::{MembershipRequest, MembershipResponse, StateHeadResponse};
 
+mod bounty;
+
 const HOLDINGS_PODLANG: &str = include_str!("holdings.podlang");
 /// The Bitcraft app's value table, at the game commit this is built from.
 const INVENTORY_VALUES: &str = include_str!("../../../apps/bitcraft/ui/inventory-values.json");
@@ -70,7 +72,9 @@ fn usage() -> ! {
   holdings classes --pexe BITCRAFT.pexe
   holdings prove --player NAME --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
   holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json
-  holdings onchain-pod --out POD.json ITEM.dobj"
+  holdings onchain-pod --out POD.json ITEM.dobj
+  holdings bounty-pod --sync URL [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json ITEM.dobj...
+  holdings bounty-info --threshold BIT [--recipient 0xADDRESS]"
     );
     std::process::exit(2)
 }
@@ -86,7 +90,8 @@ fn main() -> Result<()> {
             "--mock" | "--offline" => {
                 switches.insert(arg);
             }
-            "--pexe" | "--player" | "--out" | "--sync" | "--chunk" => {
+            "--pexe" | "--player" | "--out" | "--sync" | "--chunk" | "--block" | "--recipient"
+            | "--threshold" => {
                 let value = args.next().unwrap_or_else(|| usage());
                 flags.insert(arg, value);
             }
@@ -121,8 +126,110 @@ fn main() -> Result<()> {
             ensure!(paths.len() == 1, "onchain-pod takes one item file");
             onchain_pod(Path::new(&flag("--out")), &paths[0])
         }
+        "bounty-pod" => {
+            ensure!(!paths.is_empty(), "no item files given");
+            let block = flags
+                .get("--block")
+                .map(|n| n.parse().context("--block takes a block number"))
+                .transpose()?;
+            let threshold = flag("--threshold").parse().context("--threshold takes BIT")?;
+            bounty_pod(
+                &flag("--sync"),
+                block,
+                &flag("--recipient"),
+                threshold,
+                Path::new(&flag("--out")),
+                &paths,
+            )
+        }
+        "bounty-info" => {
+            let threshold = flag("--threshold").parse().context("--threshold takes BIT")?;
+            bounty_info(flags.get("--recipient").map(String::as_str), threshold)
+        }
         _ => usage(),
     }
+}
+
+/// An item file's object.
+fn read_object(path: &Path) -> Result<Dictionary> {
+    let item: ItemFile = serde_json::from_str(
+        &fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
+    )
+    .with_context(|| format!("{} is not an item file", path.display()))?;
+    ensure!(
+        item.metadata.class.plugin_name == "bitcraft",
+        "{} is not a Bitcraft item",
+        path.display()
+    );
+    Ok(item.obj)
+}
+
+/// Proves `BountyClaim(state_header, recipient, threshold)` for the items, as a
+/// pod's only public statement, against the state at `block` (the head when
+/// None) of a synchronizer with the holdings witness endpoint; writes the pod
+/// for pod2-onchain's `wrap`.
+fn bounty_pod(
+    sync: &str,
+    block: Option<i64>,
+    recipient: &str,
+    threshold: i64,
+    out: &Path,
+    items: &[PathBuf],
+) -> Result<()> {
+    let objects = items.iter().map(|p| read_object(p)).collect::<Result<Vec<_>>>()?;
+    let witness = bounty::fetch_witness(sync, block, &objects)?;
+    let header = witness.header();
+    let live = bounty::live_items(objects, &witness)?;
+    let params = Params::default();
+    let mut ctx = BuildContext::new(
+        MultiPodBuilder::new(&params, &DEFAULT_VD_SET),
+        vec![bounty::bounty_module()?],
+    );
+    let recipient_value = bounty::recipient_value(recipient)?;
+    let (_, total) = bounty::prove_claim(&mut ctx, &header, &live, &recipient_value, threshold)?;
+    let solution = ctx.builder.solve().map_err(|err| anyhow!(err))?;
+    eprintln!("{}", solution.solution_breakdown());
+    let started = Instant::now();
+    let pod = solution
+        .prove(&Prover {})
+        .map_err(|err| anyhow!(err))?
+        .output_pod()
+        .clone();
+    pod.pod.verify().map_err(|err| anyhow!("own proof fails: {err}"))?;
+    ensure!(pod.pod.pub_statements().len() == 1, "the pod has more than one public statement");
+    fs::write(out, serde_json::to_string(&pod)?)?;
+    eprintln!(
+        "claimed {} gems worth {total} BIT (threshold {threshold}) for {recipient} in {:.1} s, \
+         against state root {} (block {}); pod in {}",
+        live.len(),
+        started.elapsed().as_secs_f64(),
+        encode_hash_hex(&witness.state_root),
+        witness.block_number,
+        out.display()
+    );
+    Ok(())
+}
+
+/// What a bounty contract is deployed with, and checks a claim's public
+/// inputs against: the `BountyClaim` predicate hash, and the threshold's
+/// value (and a recipient's, if given), each packed limb 3 first into 32
+/// bytes as the contract packs them.
+fn bounty_info(recipient: Option<&str>, threshold: i64) -> Result<()> {
+    let module = bounty::bounty_module()?;
+    let claim = module
+        .predicate_ref_by_name("BountyClaim")
+        .expect("bounty.podlang defines BountyClaim");
+    let packed = |raw: pod2::middleware::RawValue| encode_hash_hex(&Hash::from(raw));
+    println!("BountyClaim predicate  {}", encode_hash_hex(&Predicate::Custom(claim).hash()));
+    println!("threshold {threshold:<13}{}", packed(Value::from(threshold).raw()));
+    if let Some(recipient) = recipient {
+        println!("recipient {recipient}  {}", packed(bounty::recipient_value(recipient)?.raw()));
+    }
+    println!("gems counted:");
+    for gem in bounty::gems()? {
+        println!("  {:<9} {:>11} BIT  class {}", gem.name, gem.value, encode_hash_hex(&gem.class));
+    }
+    Ok(())
 }
 
 // ============================================================================

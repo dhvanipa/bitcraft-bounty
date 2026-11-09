@@ -119,6 +119,57 @@ On 2026-11-09, against the hosted synchronizer:
 | pods from two players merged into one file | refused: different players |
 | the same Emerald proved by a second player | verifies, with the same tag (`0xf44df94e3a…`), so a leaderboard can count it once |
 
+## A bounty claim
+
+`BountyClaim(state_header, recipient, threshold)`
+([src/bounty.podlang](src/bounty.podlang)) is the statement the bounty
+contract ([../onchain/](../onchain/README.md#the-bounty-bountyescrow)) pays
+for. The prover knows object states, each with a different tag, such that
+each one
+
+- is in the created array of `state_header` (`LiveObject`);
+- is unspent there: its nullifier is absent from the nullifier set of
+  `state_header`, by a Merkle proof of absence (`LiveObject`);
+- is a gem: `H(type, value)` is in a set with one entry per gem class and its
+  value in BIT, so the value is the gem's (`LiveGem`);
+
+and their values add up to at least `threshold` (`GemsTotal`, one step per
+gem; `SetInsert` of each tag requires it to be new, so no object counts
+twice). `state_header` is the state's header record, whose hash is the
+synchronizer's `state_root`. `recipient` is the address the bounty pays, as 4
+limbs of 40 bits, made public so a copied proof pays the same address.
+
+The gem table ([src/bounty.rs](src/bounty.rs), `GEMS`):
+
+| Gem | BIT |
+|---|---:|
+| Quartz | 100 |
+| Amethyst | 2,000 |
+| Sapphire | 40,000 |
+| Emerald | 800,000 |
+| Ruby | 16,000,000 |
+| Diamond | 320,000,000 |
+
+```bash
+holdings bounty-info --threshold 50000000
+```
+
+prints the `BountyClaim` predicate's hash (it commits to the gem table) and
+the threshold packed as the contract reads them (and a recipient, with `--recipient`).
+
+```bash
+holdings bounty-pod --sync http://127.0.0.1:3000 --block BLOCK \
+  --recipient 0xADDRESS --threshold 50000000 --out claim.json ITEM.dobj...
+```
+
+proves the claim as a pod's only public statement, against the state at
+execution block `BLOCK` (a block whose root the contract holds:
+`rootBlock(root)`). It needs a synchronizer with the witness endpoint
+([../synchronizer/](../synchronizer/README.md)), which gives each item's
+creation proof and nullifier absence proof at that block; the hosted
+synchronizer has none. It refuses a spent item, an item not created by then,
+a non-gem, the same object twice, and a total below the threshold.
+
 ## What a leaderboard still needs
 
 - **Count each tag once across players.** Copies of one file are equally held
