@@ -123,6 +123,21 @@ journalctl -u holdings-root-poster -n 20
 The APIs listen on loopback only. To prove from a laptop, tunnel:
 `ssh -L 3000:127.0.0.1:3000 ubuntu@HOST`, then `--sync http://127.0.0.1:3000`.
 
+## Measured (2026-11-09, m7i.large)
+
+| What | Measured |
+|---|---|
+| first build of both services (`install.sh`) | 20 min 16 s |
+| catch-up from the genesis slot to the hosted head | 3 h 35 min (10:45:43 to 14:20:21 UTC), 49,733 slots, 3.9 slots/s |
+| CPU during the catch-up | load average 0.3 to 0.4 of 2 vCPUs: the archiver fetches one slot at a time, so request latency sets the pace |
+| disk after the catch-up (7 days of chain) | archived blobs 7.2 GB (about 1 GB per day), synchronizer 2.7 GB, Postgres 81 MB; 72 GB free |
+| state roots against the hosted synchronizer | equal at all 16 blocks compared, from the first state (block 12049833) to the finalized block 12098006 |
+| the relayer sharing the RPC | no errors in its journal during the catch-up |
+
+The synchronizer runs 2 slots behind the archiver while catching up and logs
+"archived blobs ... not available yet" each time it waits for it; that
+warning is expected.
+
 ## Shared RPC
 
 The synchronizer and the archiver use the same Sepolia RPC as the game
