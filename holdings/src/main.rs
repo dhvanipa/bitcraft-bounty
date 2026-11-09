@@ -71,7 +71,7 @@ fn usage() -> ! {
   holdings prove --player NAME --sync URL [--block N] --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
   holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json
   holdings onchain-pod --sync URL [--block N] --out POD.json ITEM.dobj
-  holdings bounty-pod --sync URL [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json [--mock] ITEM.dobj...
+  holdings bounty-pod --sync URL [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json [--all] [--mock] ITEM.dobj...
   holdings bounty-info --threshold BIT [--recipient 0xADDRESS] [--pexe BITCRAFT.pexe]"
     );
     std::process::exit(2)
@@ -85,7 +85,7 @@ fn main() -> Result<()> {
     let mut paths: Vec<PathBuf> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--mock" | "--offline" => {
+            "--mock" | "--offline" | "--all" => {
                 switches.insert(arg);
             }
             "--pexe" | "--player" | "--out" | "--sync" | "--chunk" | "--block" | "--recipient"
@@ -141,6 +141,7 @@ fn main() -> Result<()> {
                 threshold,
                 Path::new(&flag("--out")),
                 &paths,
+                switches.contains("--all"),
                 switches.contains("--mock"),
             )
         }
@@ -192,6 +193,7 @@ fn read_object(path: &Path) -> Result<Dictionary> {
 /// for pod2-onchain's `wrap`. With `mock`, pod2's mock prover checks every
 /// operation of the same claim without proving it, in a fraction of the
 /// time: a dry run, whose pod can't be wrapped.
+#[allow(clippy::too_many_arguments)]
 fn bounty_pod(
     sync: &str,
     block: Option<i64>,
@@ -199,6 +201,7 @@ fn bounty_pod(
     threshold: i64,
     out: &Path,
     items: &[PathBuf],
+    all: bool,
     mock: bool,
 ) -> Result<()> {
     let objects = items.iter().map(|p| read_object(p)).collect::<Result<Vec<_>>>()?;
@@ -210,6 +213,20 @@ fn bounty_pod(
         eprintln!("skip   {name:<12} {file}: {why}");
     }
     ensure!(!live.is_empty(), "no item is live and worth something at block {}", witness.block_number);
+    let live_count = live.len();
+    let (live, copies, available) = if all {
+        let available = live.iter().map(|item| item.valued.value()).sum();
+        (live, 0, available)
+    } else {
+        bounty::select(live, threshold)?
+    };
+    eprintln!(
+        "using {} of {live_count} live items{} ({} BIT in all{})",
+        live.len(),
+        if all { "" } else { ", the most valuable that reach the threshold" },
+        available as f64 / 100.0,
+        if copies > 0 { format!("; {copies} copies of one object dropped") } else { String::new() }
+    );
     let mut by_class: std::collections::BTreeMap<&str, (usize, i64)> = Default::default();
     for item in &live {
         let entry = by_class.entry(item.name).or_default();

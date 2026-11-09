@@ -28,7 +28,7 @@ use txlib::StateHeader;
 
 use crate::{
     INVENTORY_VALUES,
-    live::{LiveObject, Witness, field, import_holdings, live_objects, prove_live_object},
+    live::{LiveObject, Witness, field, import_holdings, live_objects, prove_live_object, tag_of},
 };
 
 const BOUNTY_PODLANG: &str = include_str!("bounty.podlang");
@@ -348,6 +348,48 @@ pub fn live_items(
     Ok((items, skipped))
 }
 
+/// What a claim of `items` would use: one file per object (copies of one
+/// object share its tag, and a claim counts each object once), then the
+/// fewest items that reach `threshold`, most valuable first. Returns the
+/// chosen items, how many copies were dropped, and the value of every
+/// distinct item, all in centi-BIT. Fails when even every item is below the
+/// threshold.
+///
+/// pod2 plans a claim's pods in time that grows faster than its item count
+/// (100 items took 6 s on 2026-11-09, 300 items 52 s), so a claim names as
+/// few items as it can. Taking the largest values first gives the fewest:
+/// no k items are worth more than the k most valuable.
+pub fn select(items: Vec<LiveItem>, threshold: i64) -> Result<(Vec<LiveItem>, usize, i64)> {
+    let given = items.len();
+    let mut seen = HashSet::new();
+    let mut distinct = Vec::with_capacity(given);
+    for item in items {
+        if seen.insert(tag_of(&item.live.obj)?) {
+            distinct.push(item);
+        }
+    }
+    let copies = given - distinct.len();
+    let available: i64 = distinct.iter().map(|item| item.valued.value()).sum();
+    ensure!(
+        available >= threshold,
+        "the live items are worth {} BIT in all, below the threshold of {} BIT",
+        available as f64 / 100.0,
+        threshold as f64 / 100.0
+    );
+    distinct.sort_by_key(|item| std::cmp::Reverse(item.valued.value()));
+    let mut sum = 0;
+    let keep = distinct
+        .iter()
+        .take_while(|item| {
+            let more = sum < threshold;
+            sum += item.valued.value();
+            more
+        })
+        .count();
+    distinct.truncate(keep);
+    Ok((distinct, copies, available))
+}
+
 /// Proves `ItemValue(obj, value)` for one item.
 fn prove_item_value(ctx: &mut BuildContext, tables: &Tables, item: &LiveItem) -> Result<Statement> {
     let obj = &item.live.obj;
@@ -628,6 +670,37 @@ mod tests {
         let emerald = item_obj("Emerald", 1, &[]);
         let state = State::new(std::slice::from_ref(&emerald), &[]);
         assert!(claim(&state.header, &[item(&emerald, &state), item(&emerald, &state)], 1).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_claim_takes_the_fewest_most_valuable_items() -> Result<()> {
+        let objs = vec![
+            item_obj("Stone", 1, &[]),
+            item_obj("Sapphire", 2, &[]),
+            item_obj("Emerald", 3, &[]),
+            item_obj("Sapphire", 4, &[]),
+            item_obj("Quarry", 5, &[("level", 10)]),
+        ];
+        let state = State::new(&objs, &[]);
+        let items = || objs.iter().map(|obj| item(obj, &state)).collect::<Vec<_>>();
+        let names = |chosen: &[LiveItem]| -> Vec<i64> { chosen.iter().map(|i| i.valued.value()).collect() };
+        // 800,000 + 40,000 BIT needs the Emerald and one Sapphire
+        let (chosen, copies, available) = select(items(), 84_000_000)?;
+        assert_eq!(names(&chosen), vec![80_000_000, 4_000_000]);
+        assert_eq!((copies, available), (0, 80_000_000 + 2 * 4_000_000 + 2_046_000 + 200));
+        // one more centi-BIT needs the next most valuable item too
+        assert_eq!(select(items(), 84_000_001)?.0.len(), 3);
+        // a copy of the Emerald's file counts once
+        let mut doubled = items();
+        doubled.push(item(&objs[2], &state));
+        let (chosen, copies, _) = select(doubled, 80_000_000)?;
+        assert_eq!((chosen.len(), copies), (1, 1));
+        // everything together is not enough
+        assert!(select(items(), 100_000_000).is_err());
+        // and the chosen items prove the claim
+        let (chosen, _, _) = select(items(), 84_000_000)?;
+        assert_eq!(claim(&state.header, &chosen, 84_000_000)?, 84_000_000);
         Ok(())
     }
 

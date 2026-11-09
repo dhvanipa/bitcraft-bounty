@@ -216,8 +216,10 @@ execution block `BLOCK` (a block whose root the contract holds:
 ([../synchronizer/](../synchronizer/README.md)), which gives each item's
 creation proof and nullifier absence proof at that block; the hosted
 synchronizer has none. It skips, with a note, items spent or not yet created
-there and items worth nothing, prints the claim by class, and refuses the
-same object twice and a total below the threshold.
+there and items worth nothing, keeps one file per object (copies share a
+tag), and then claims only the fewest items that reach the threshold, most
+valuable first; `--all` claims every item instead. It prints the claim by
+class, and refuses a total below the threshold.
 
 `--mock` checks every operation of the same claim with pod2's mock prover,
 without proving it: a dry run that shows what a claim would count. Its pod
@@ -227,10 +229,14 @@ A claim's cost grows faster than its item count, in pod2's planning of how
 to split the statements across pods: on 2026-11-09 a dry run of 100 items
 planned 31 pods in 6 s, and one of 300 items 92 pods in 52 s. A whole
 inventory of about 4,800 items would take hours to plan before proving
-about 1,500 pods (an extrapolation, not a measurement), so a claim should
-name the fewest, most valuable items that reach the threshold. The
-server's inventory on 2026-11-09 at 16:22 UTC held 6 Emeralds and 58
-Sapphires, 7,120,000 BIT in 64 items, of its 9,447,023 BIT.
+about 1,500 pods (an extrapolation, not a measurement), which is why
+`bounty-pod` takes the fewest, most valuable items that reach the
+threshold. On 2026-11-09 at 17:18 UTC, given all 4,643 of the server's item
+files, it found 4,407 live at block 12098857, worth 9,367,903.69 BIT, and for
+a threshold of 7,000,000 BIT claimed 61 of them, 6 Emeralds and 55
+Sapphires: 1,165 statements in 19 pods, proved in 264 s (315 s with reading
+the files and fetching their witness; 4.1 GB; the Mac helper's search on
+medium).
 
 The app's rules, reimplemented in Python over the server's 5,036 live item
 files, gave exactly the dashboard's 9,447,022.73 BIT. A dry run of the
