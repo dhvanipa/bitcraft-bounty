@@ -3,30 +3,25 @@
 //! root, for `recipient`, proved as a pod's only public statement so that
 //! pod2-onchain's wrapper can turn it into a proof a contract checks.
 //!
-//! The proofs that each gem was created and is unspent at that root come from
-//! a synchronizer with the holdings witness endpoint
-//! (`POST /v1/holdings/witness`, synchronizer/patches/): the hosted one only
-//! answers against its head and cannot prove a nullifier absent.
+//! Each gem is a `LiveObject` at that root (live.rs): created and unspent
+//! there, by proofs from a synchronizer with the holdings witness endpoint.
 
 use std::{collections::HashSet, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use pod2::{
-    backends::plonky2::primitives::merkletree::MerkleProof,
-    frontend::{Operation, entry},
-    lang::{Module, load_module},
+    frontend::entry,
+    lang::Module,
     middleware::{
-        F, Hash, NativeOperation, OperationAux, OperationType, Params, RawValue, Statement,
-        StrKey, Value,
+        F, Hash, Params, RawValue, Statement, Value,
         containers::{Dictionary, Set},
         hash_values,
     },
 };
 use pod2utils::{macros::BuildContext, op};
-use serde::{Deserialize, Serialize};
-use txlib::{STATE_HEADER_CREATED_SLOT, STATE_HEADER_NULLIFIERS_SLOT, StateHeader};
+use txlib::StateHeader;
 
-use crate::{NULLIFIER_VERSION, TAG_VERSION};
+use crate::live::{LiveObject, Witness, field, import_holdings, live_objects, prove_live_object};
 
 const BOUNTY_PODLANG: &str = include_str!("bounty.podlang");
 
@@ -82,9 +77,7 @@ pub fn bounty_module() -> Result<Arc<Module>> {
         .map(|gem| format!("Untyped({:#})", gem_entry(gem.class, gem.value)))
         .collect();
     let source = BOUNTY_PODLANG.replace("GEM_VALUES", &format!("#[{}]", entries.join(", ")));
-    let module = load_module(&source, "bounty", &Params::default(), &[])
-        .map_err(|err| anyhow!("bounty.podlang does not compile: {err}"))?;
-    Ok(Arc::new(module))
+    import_holdings(&source, "bounty")
 }
 
 /// An Ethereum address as a pod2 value: its 160 bits in 4 limbs of 40 bits,
@@ -109,145 +102,38 @@ pub fn recipient_value(address: &str) -> Result<Value> {
 }
 
 // ============================================================================
-// The synchronizer's witness
-// ============================================================================
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WitnessRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    block_number: Option<i64>,
-    object_commitments: Vec<Hash>,
-    nullifiers: Vec<Hash>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Witness {
-    pub state_root: Hash,
-    pub block_number: i64,
-    block_timestamp: i64,
-    block_hash: Hash,
-    created_root: Hash,
-    nullifiers_root: Hash,
-    prior_state_history_root: Hash,
-    created_proofs: Vec<CreatedProof>,
-    nullifier_proofs: Vec<NullifierProof>,
-}
-
-#[derive(Deserialize)]
-struct CreatedProof {
-    present: bool,
-    index: Option<i64>,
-    proof: Option<MerkleProof>,
-}
-
-#[derive(Deserialize)]
-struct NullifierProof {
-    spent: bool,
-    proof: MerkleProof,
-}
-
-impl Witness {
-    pub fn header(&self) -> StateHeader {
-        StateHeader::new(
-            self.block_number,
-            self.block_timestamp,
-            self.block_hash,
-            self.created_root,
-            self.nullifiers_root,
-            self.prior_state_history_root,
-        )
-    }
-}
-
-/// An object's nullifier, as txlib computes it.
-pub fn nullifier_of(obj: &Dictionary) -> Result<Hash> {
-    Ok(txlib::object_nullifier_hash(obj)?)
-}
-
-/// Asks a synchronizer with the holdings witness endpoint for the proofs about
-/// `objects` at the state of `block_number` (the head when None), and checks
-/// they place every object, unspent, under the state root it returns.
-pub fn fetch_witness(sync: &str, block_number: Option<i64>, objects: &[Dictionary]) -> Result<Witness> {
-    let request = WitnessRequest {
-        block_number,
-        object_commitments: objects.iter().map(|obj| obj.commitment()).collect(),
-        nullifiers: objects.iter().map(nullifier_of).collect::<Result<_>>()?,
-    };
-    let url = format!("{}/v1/holdings/witness", sync.trim_end_matches('/'));
-    let witness: Witness = reqwest::blocking::Client::new()
-        .post(&url)
-        .json(&request)
-        .send()
-        .with_context(|| format!("asking {url}"))?
-        .error_for_status()?
-        .json()?;
-    ensure!(
-        witness.header().hash() == witness.state_root,
-        "the witness's header does not hash to its state root"
-    );
-    ensure!(witness.created_proofs.len() == objects.len());
-    ensure!(witness.nullifier_proofs.len() == objects.len());
-    for (i, obj) in objects.iter().enumerate() {
-        let created = &witness.created_proofs[i];
-        ensure!(
-            created.present,
-            "item {} is not in the created set at block {}",
-            obj.commitment(),
-            witness.block_number
-        );
-        ensure!(
-            !witness.nullifier_proofs[i].spent,
-            "item {} is spent at block {}",
-            obj.commitment(),
-            witness.block_number
-        );
-    }
-    Ok(witness)
-}
-
-// ============================================================================
 // The claim
 // ============================================================================
 
-/// What the claim needs for one item: the object, its gem value, and the proofs
-/// of its creation and of its nullifier's absence under the header's roots.
+/// What the claim needs for one item: a live object and its gem value.
 pub struct LiveItem {
-    pub obj: Dictionary,
+    pub live: LiveObject,
     pub value: i64,
-    pub index: i64,
-    pub created_proof: MerkleProof,
-    pub nullifier_proof: MerkleProof,
 }
 
 /// The items of `objects` with their proofs from `witness`, in order; each must
-/// be a gem.
+/// be a gem, live at the witness's state.
 pub fn live_items(objects: Vec<Dictionary>, witness: &Witness) -> Result<Vec<LiveItem>> {
     let gems = gems()?;
-    objects
+    let commitments: Vec<Hash> = objects.iter().map(|obj| obj.commitment()).collect();
+    live_objects(objects, witness)?
         .into_iter()
-        .zip(witness.created_proofs.iter().zip(&witness.nullifier_proofs))
-        .map(|(obj, (created, nullified))| {
-            let class = Hash::from(field(&obj, "type")?.raw());
+        .zip(commitments)
+        .map(|(live, commitment)| {
+            let live = live.map_err(|why| {
+                anyhow!("item {commitment} is {why} (block {})", witness.block_number)
+            })?;
+            let class = Hash::from(field(&live.obj, "type")?.raw());
             let gem = gems
                 .iter()
                 .find(|gem| gem.class == class)
-                .with_context(|| format!("item {} is not a gem", obj.commitment()))?;
+                .with_context(|| format!("item {commitment} is not a gem"))?;
             Ok(LiveItem {
                 value: gem.value,
-                index: created.index.context("no created index")?,
-                created_proof: created.proof.clone().context("no created proof")?,
-                nullifier_proof: nullified.proof.clone(),
-                obj,
+                live,
             })
         })
         .collect()
-}
-
-fn field(obj: &Dictionary, name: &str) -> Result<Value> {
-    obj.get(&StrKey::from(name))?
-        .with_context(|| format!("the item has no {name} field"))
 }
 
 /// Proves `LiveGem(state_header, value, tag)` for one item; returns the
@@ -258,67 +144,18 @@ fn prove_live_gem(
     gem_values: &Set,
     item: &LiveItem,
 ) -> Result<(Statement, Hash)> {
-    let header_array = header.array();
-    let obj = &item.obj;
-
-    // LiveObject
-    let st_created = ctx.builder.priv_op(Operation(
-        OperationType::Native(NativeOperation::ArrayContainsFromEntries),
-        vec![
-            Value::from(header.created_root).into(),
-            Value::from(item.index).into(),
-            Value::from(obj.clone()).into(),
-        ],
-        OperationAux::MerkleProof(item.created_proof.clone()),
-    ))?;
-    let st_created = ctx.builder.priv_op(Operation::replace_value_with_entry(
-        vec![Some(entry(&header_array, STATE_HEADER_CREATED_SLOT as i64)?), None, None],
-        st_created,
-    ))?;
-    let key_hash = hash_values(&[Value::from(obj.commitment()), field(obj, "key")?]);
-    let st_key_hash = ctx
-        .builder
-        .priv_op(op!(Hash(obj, entry(obj, "key")?, key_hash)))?;
-    let nullifier = hash_values(&[Value::from(key_hash), Value::from(NULLIFIER_VERSION)]);
-    ensure!(nullifier == nullifier_of(obj)?, "nullifier differs from txlib's");
-    let st_nullifier = ctx
-        .builder
-        .priv_op(op!(Hash(key_hash, NULLIFIER_VERSION, nullifier)))?;
-    let st_unspent = ctx.builder.priv_op(Operation(
-        OperationType::Native(NativeOperation::SetNotContainsFromEntries),
-        vec![
-            Value::from(header.nullifiers_root).into(),
-            Value::from(nullifier).into(),
-        ],
-        OperationAux::MerkleProof(item.nullifier_proof.clone()),
-    ))?;
-    let st_unspent = ctx.builder.priv_op(Operation::replace_value_with_entry(
-        vec![Some(entry(&header_array, STATE_HEADER_NULLIFIERS_SLOT as i64)?), None],
-        st_unspent,
-    ))?;
-    let st_live = ctx.apply_custom_pred_simple(
-        false,
-        "LiveObject",
-        vec![st_created, st_key_hash, st_nullifier, st_unspent],
-    )?;
-
-    // LiveGem
+    let obj = &item.live.obj;
+    let (st_live, tag) = prove_live_object(ctx, header, &item.live)?;
     let class = field(obj, "type")?;
     let gem_entry = hash_values(&[class, Value::from(item.value)]);
     let st_entry = ctx
         .builder
         .priv_op(op!(Hash(entry(obj, "type")?, item.value, gem_entry)))?;
     let st_table = ctx.builder.priv_op(op!(SetContains(gem_values, gem_entry)))?;
-    let tag = hash_values(&[field(obj, "stable_identifier")?, Value::from(TAG_VERSION)]);
-    let st_tag = ctx.builder.priv_op(op!(Hash(
-        entry(obj, "stable_identifier")?,
-        TAG_VERSION,
-        tag
-    )))?;
     let st_gem = ctx.apply_custom_pred_simple(
         false,
         "LiveGem",
-        vec![st_live, st_entry, st_table, st_tag],
+        vec![st_live, st_entry, st_table],
     )?;
     Ok((st_gem, tag))
 }
@@ -355,7 +192,7 @@ pub fn prove_claim(
             Some((st_prev, prev_total, prev_tags)) => {
                 let mut tags = prev_tags.clone();
                 if tags.contains(&Value::from(tag))? {
-                    bail!("item {} is the same object as an earlier one", item.obj.commitment());
+                    bail!("item {} is the same object as an earlier one", item.live.obj.commitment());
                 }
                 tags.insert(&Value::from(tag))?;
                 let total = prev_total + item.value;
@@ -397,12 +234,12 @@ pub fn prove_claim(
 #[cfg(test)]
 mod tests {
     use pod2::{
-        backends::plonky2::mock::mainpod::MockProver,
-        frontend::MultiPodBuilder,
-        middleware::{VDSet, containers::Array},
+        backends::plonky2::mock::mainpod::MockProver, frontend::MultiPodBuilder,
+        middleware::{StrKey, VDSet},
     };
 
     use super::*;
+    use crate::live::testing::{State, object};
 
     fn gem(name: &str, key: i64) -> Dictionary {
         let class = gems()
@@ -411,75 +248,26 @@ mod tests {
             .find(|gem| gem.name == name)
             .unwrap()
             .class;
-        let initial = Dictionary::new(
-            [
-                (StrKey::from("type"), Value::from(class)),
-                (StrKey::from("key"), Value::from(key)),
-            ]
-            .into(),
-        );
-        txlib::with_stable_identifier(&initial)
+        object(class, key)
     }
 
-    /// A state with `created` in its created array and `spent`'s nullifiers in
-    /// its nullifier set, and a witness for `claimed` against it.
-    fn state(created: &[Dictionary], spent: &[Dictionary]) -> (StateHeader, Array, Set) {
-        let array = Array::new(created.iter().map(|obj| Value::from(obj.clone())).collect());
-        let nullifiers = Set::new(
-            spent
-                .iter()
-                .map(|obj| Value::from(nullifier_of(obj).unwrap()))
-                .collect(),
-        );
-        let header = StateHeader::new(
-            7,
-            7000,
-            Hash::default(),
-            array.commitment(),
-            nullifiers.commitment(),
-            Hash::default(),
-        );
-        (header, array, nullifiers)
-    }
-
-    /// `obj` as the claim sees it, worth `value`, with its creation proof and
-    /// the proof its nullifier is absent (or, when it is spent, present: the
-    /// only proof there is).
-    fn item_worth(
-        obj: &Dictionary,
-        value: i64,
-        created: &[Dictionary],
-        array: &Array,
-        nullifiers: &Set,
-    ) -> LiveItem {
-        let index = created.iter().position(|o| o == obj).unwrap();
-        let (_, created_proof) = array.prove(index).unwrap();
-        let nullifier = Value::from(nullifier_of(obj).unwrap());
-        let nullifier_proof = nullifiers
-            .prove_nonexistence(&nullifier)
-            .or_else(|_| nullifiers.prove(&nullifier))
-            .unwrap();
+    /// `obj` as the claim sees it, worth `value`.
+    fn item_worth(obj: &Dictionary, value: i64, state: &State) -> LiveItem {
         LiveItem {
-            obj: obj.clone(),
+            live: state.live(obj),
             value,
-            index: index as i64,
-            created_proof,
-            nullifier_proof,
         }
     }
 
-    fn item(obj: &Dictionary, created: &[Dictionary], array: &Array, nullifiers: &Set) -> LiveItem {
+    fn item(obj: &Dictionary, state: &State) -> LiveItem {
         let class = Hash::from(field(obj, "type").unwrap().raw());
         let value = gems().unwrap().iter().find(|g| g.class == class).unwrap().value;
-        item_worth(obj, value, created, array, nullifiers)
+        item_worth(obj, value, state)
     }
 
     fn claim(header: &StateHeader, items: &[LiveItem], threshold: i64) -> Result<i64> {
         let params = Params::default();
-        let mut ctx = BuildContext::new(
-            MultiPodBuilder::new(&params, &VDSet::new(&[])),
-            vec![bounty_module()?],
-        );
+        let mut ctx = crate::live::context(MultiPodBuilder::new(&params, &VDSet::new(&[])), bounty_module()?)?;
         let recipient = recipient_value("0x00000000000000000000000000000000000000ee")?;
         let (_, total) = prove_claim(&mut ctx, header, items, &recipient, threshold)?;
         let pod = ctx
@@ -501,13 +289,10 @@ mod tests {
         let sapphire = gem("Sapphire", 2);
         let diamond = gem("Diamond", 3);
         let created = vec![emerald.clone(), sapphire.clone(), diamond.clone()];
-        let (header, array, nullifiers) = state(&created, &[]);
-        let items: Vec<LiveItem> = created
-            .iter()
-            .map(|obj| item(obj, &created, &array, &nullifiers))
-            .collect();
-        assert_eq!(claim(&header, &items, 320_840_000)?, 320_840_000);
-        assert!(claim(&header, &items, 320_840_001).is_err(), "below the threshold");
+        let state = State::new(&created, &[]);
+        let items: Vec<LiveItem> = created.iter().map(|obj| item(obj, &state)).collect();
+        assert_eq!(claim(&state.header, &items, 320_840_000)?, 320_840_000);
+        assert!(claim(&state.header, &items, 320_840_001).is_err(), "below the threshold");
         Ok(())
     }
 
@@ -516,19 +301,15 @@ mod tests {
         let emerald = gem("Emerald", 1);
         let spent = gem("Ruby", 2);
         let created = vec![emerald.clone(), spent.clone()];
-        let (header, array, nullifiers) = state(&created, &[spent.clone()]);
-        // its nullifier is in the set, so there is no proof of its absence
-        assert!(
-            nullifiers
-                .prove_nonexistence(&Value::from(nullifier_of(&spent)?))
-                .is_err()
-        );
+        let state = State::new(&created, std::slice::from_ref(&spent));
+        // its nullifier is in the set, so there is no proof of its absence;
         // with the proof of presence instead, the claim fails
-        let ruby = item(&spent, &created, &array, &nullifiers);
-        assert!(claim(&header, &[ruby], 1).is_err());
+        assert!(state.is_spent(&spent));
+        let ruby = item(&spent, &state);
+        assert!(claim(&state.header, &[ruby], 1).is_err());
         // the unspent Emerald alone is fine
-        let fine = item(&emerald, &created, &array, &nullifiers);
-        assert_eq!(claim(&header, &[fine], 800_000)?, 800_000);
+        let fine = item(&emerald, &state);
+        assert_eq!(claim(&state.header, &[fine], 800_000)?, 800_000);
         Ok(())
     }
 
@@ -536,10 +317,10 @@ mod tests {
     fn the_same_object_counts_once() -> Result<()> {
         let emerald = gem("Emerald", 1);
         let created = vec![emerald.clone()];
-        let (header, array, nullifiers) = state(&created, &[]);
-        let one = item(&emerald, &created, &array, &nullifiers);
-        let again = item(&emerald, &created, &array, &nullifiers);
-        assert!(claim(&header, &[one, again], 1).is_err());
+        let state = State::new(&created, &[]);
+        let one = item(&emerald, &state);
+        let again = item(&emerald, &state);
+        assert!(claim(&state.header, &[one, again], 1).is_err());
         Ok(())
     }
 
@@ -550,12 +331,12 @@ mod tests {
         other.update(&StrKey::from("type"), &Value::from(Hash::default()))?;
         let emerald = gem("Emerald", 2);
         let created = vec![other.clone(), emerald.clone()];
-        let (header, array, nullifiers) = state(&created, &[]);
-        let fake = item_worth(&other, 800_000, &created, &array, &nullifiers);
-        assert!(claim(&header, &[fake], 1).is_err());
+        let state = State::new(&created, &[]);
+        let fake = item_worth(&other, 800_000, &state);
+        assert!(claim(&state.header, &[fake], 1).is_err());
         // a real Emerald claimed at a Ruby's value
-        let inflated = item_worth(&emerald, 16_000_000, &created, &array, &nullifiers);
-        assert!(claim(&header, &[inflated], 1).is_err());
+        let inflated = item_worth(&emerald, 16_000_000, &state);
+        assert!(claim(&state.header, &[inflated], 1).is_err());
         Ok(())
     }
 

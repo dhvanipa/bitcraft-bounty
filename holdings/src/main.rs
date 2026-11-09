@@ -2,14 +2,16 @@
 //! check such a proof. A prototype of a leaderboard whose scores are proofs.
 //!
 //! - `prove` reads item files (`.dobj`, as in `~/.dobj/objects/`) and proves,
-//!   for each, `Holds(state_root, type, nullifier, tag)` (`holdings.podlang`)
-//!   in one pod2 MainPod, with the player's name as a public statement. The
-//!   item files never leave the machine: holding the file is owning the item.
-//! - `verify` checks that the MainPod is a real proof over the network's
-//!   circuits, that each claim is our `Holds`, which Bitcraft class each
-//!   `type` is (by compiling the plugin), and asks the synchronizer that each
-//!   state root is one the chain reached and that no claimed item has been
-//!   spent. It prints the claims and the total BIT value.
+//!   for each item live at one state, `Holds(state_root, type, tag)`
+//!   (`holdings.podlang`) in pod2 MainPods, with the player's name as a public
+//!   statement. Live means created and unspent at that state, both proved
+//!   in-circuit from a synchronizer's witness. The item files never leave the
+//!   machine: holding the file is owning the item.
+//! - `verify` checks that the MainPods are real proofs over the network's
+//!   circuits, that each claim is our `Holds` about the file's state root,
+//!   which Bitcraft class each `type` is (by compiling the plugin), and asks
+//!   the synchronizer that the state root is the network's. It prints the
+//!   claims, the total BIT value and how old the state is.
 //! - `classes` prints the plugin's module hash and each class's type hash.
 //!
 //! Values are the Bitcraft app's (`apps/bitcraft/ui/inventory-values.json`).
@@ -17,50 +19,46 @@
 //! classes with one fixed value (gems, resources) are counted.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use payload::{db_bytes_to_hash, encode_hash_hex};
+use payload::{decode_hash_hex, encode_hash_hex};
 use pod2::{
-    backends::plonky2::{
-        basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver,
-        primitives::merkletree::MerkleProof,
-    },
-    frontend::{MainPod, MultiPodBuilder, Operation, entry},
-    lang::{Module, load_module},
+    backends::plonky2::{basetypes::DEFAULT_VD_SET, mainpod::Prover, mock::mainpod::MockProver},
+    frontend::{MainPod, MultiPodBuilder},
+    lang::Module,
     middleware::{
-        CustomPredicateRef, Hash, MainPodProver, NativeOperation, OperationAux, OperationType,
-        Predicate,
-        Params, PodType, Statement, StrKey, VDSet, Value, ValueRef,
-        containers::{Array, Dictionary},
-        hash_values,
+        CustomPredicateRef, Hash, MainPodProver, Params, PodType, Predicate, Statement, VDSet,
+        Value, ValueRef, containers::Dictionary,
     },
 };
 use pod2utils::{macros::BuildContext, op};
 use serde::{Deserialize, Serialize};
-use txlib::{STATE_HEADER_CREATED_SLOT, StateHeader};
-use wire_types::synchronizer::{MembershipRequest, MembershipResponse, StateHeadResponse};
+use txlib::StateHeader;
+use wire_types::synchronizer::StateHeadResponse;
+
+use crate::live::{
+    LiveObject, context, fetch_witness, field, holdings_module, live_objects, prove_live_object,
+};
 
 mod bounty;
+mod live;
 
-const HOLDINGS_PODLANG: &str = include_str!("holdings.podlang");
 /// The Bitcraft app's value table, at the game commit this is built from.
 const INVENTORY_VALUES: &str = include_str!("../../../apps/bitcraft/ui/inventory-values.json");
-/// txlib's nullifier domain (`OBJECT_NULLIFIER_VERSION`, crate-private there).
-const NULLIFIER_VERSION: &str = "txlib-nullifier-v1";
-/// The tag's domain; `holdings.podlang` writes the same string.
-const TAG_VERSION: &str = "bitcraft-holdings-v1";
-const FILE_VERSION: u32 = 1;
+/// 2: one state root for every claim, and no public nullifiers (2026-11-09).
+const FILE_VERSION: u32 = 2;
+/// Where `verify` checks state roots; it needs only `/v1/state/by_el`.
 const DEFAULT_SYNC: &str = "https://synchronizer.digiobjects.net";
-/// Items per pod. A pod proves at most 10 created-array memberships (pod2's
-/// `max_medium` Merkle proofs) and exposes at most 24 statements.
+/// Items per MainPod: a pod exposes at most 24 public statements, and the
+/// prover splits each chunk's private work across inner pods.
 const DEFAULT_CHUNK: usize = 9;
+/// Sepolia's beacon genesis time; slot `s` starts 12 s × `s` after it.
+const SEPOLIA_GENESIS_TIME: u64 = 1_655_733_600;
 /// The Bitcraft plugin's module hash on the network (rc.50, and rc.51 whose
 /// change added no constraints), as `holdings classes` prints it.
 const BITCRAFT_MODULE_HASH: &str =
@@ -70,9 +68,9 @@ fn usage() -> ! {
     eprintln!(
         "usage:
   holdings classes --pexe BITCRAFT.pexe
-  holdings prove --player NAME --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
+  holdings prove --player NAME --sync URL [--block N] --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
   holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json
-  holdings onchain-pod --out POD.json ITEM.dobj
+  holdings onchain-pod --sync URL [--block N] --out POD.json ITEM.dobj
   holdings bounty-pod --sync URL [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json ITEM.dobj...
   holdings bounty-info --threshold BIT [--recipient 0xADDRESS]"
     );
@@ -100,6 +98,11 @@ fn main() -> Result<()> {
         }
     }
     let flag = |name: &str| flags.get(name).cloned().unwrap_or_else(|| usage());
+    // the state to prove against: an execution block's, or the head's
+    let block: Option<i64> = flags
+        .get("--block")
+        .map(|n| n.parse().context("--block takes a block number"))
+        .transpose()?;
     match command.as_str() {
         "classes" => classes(Path::new(&flag("--pexe"))),
         "prove" => {
@@ -110,6 +113,8 @@ fn main() -> Result<()> {
             };
             prove(
                 &flag("--player"),
+                &flag("--sync"),
+                block,
                 Path::new(&flag("--out")),
                 &paths,
                 switches.contains("--mock"),
@@ -124,14 +129,10 @@ fn main() -> Result<()> {
         }
         "onchain-pod" => {
             ensure!(paths.len() == 1, "onchain-pod takes one item file");
-            onchain_pod(Path::new(&flag("--out")), &paths[0])
+            onchain_pod(&flag("--sync"), block, Path::new(&flag("--out")), &paths[0])
         }
         "bounty-pod" => {
             ensure!(!paths.is_empty(), "no item files given");
-            let block = flags
-                .get("--block")
-                .map(|n| n.parse().context("--block takes a block number"))
-                .transpose()?;
             let threshold = flag("--threshold").parse().context("--threshold takes BIT")?;
             bounty_pod(
                 &flag("--sync"),
@@ -150,8 +151,8 @@ fn main() -> Result<()> {
     }
 }
 
-/// An item file's object.
-fn read_object(path: &Path) -> Result<Dictionary> {
+/// An item file, which must be a Bitcraft item's.
+fn read_item(path: &Path) -> Result<ItemFile> {
     let item: ItemFile = serde_json::from_str(
         &fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
     )
@@ -161,7 +162,11 @@ fn read_object(path: &Path) -> Result<Dictionary> {
         "{} is not a Bitcraft item",
         path.display()
     );
-    Ok(item.obj)
+    Ok(item)
+}
+
+fn read_object(path: &Path) -> Result<Dictionary> {
+    Ok(read_item(path)?.obj)
 }
 
 /// Proves `BountyClaim(state_header, recipient, threshold)` for the items, as a
@@ -177,14 +182,11 @@ fn bounty_pod(
     items: &[PathBuf],
 ) -> Result<()> {
     let objects = items.iter().map(|p| read_object(p)).collect::<Result<Vec<_>>>()?;
-    let witness = bounty::fetch_witness(sync, block, &objects)?;
+    let witness = fetch_witness(sync, block, &objects)?;
     let header = witness.header();
     let live = bounty::live_items(objects, &witness)?;
     let params = Params::default();
-    let mut ctx = BuildContext::new(
-        MultiPodBuilder::new(&params, &DEFAULT_VD_SET),
-        vec![bounty::bounty_module()?],
-    );
+    let mut ctx = context(MultiPodBuilder::new(&params, &DEFAULT_VD_SET), bounty::bounty_module()?)?;
     let recipient_value = bounty::recipient_value(recipient)?;
     let (_, total) = bounty::prove_claim(&mut ctx, &header, &live, &recipient_value, threshold)?;
     let solution = ctx.builder.solve().map_err(|err| anyhow!(err))?;
@@ -236,11 +238,6 @@ fn bounty_info(recipient: Option<&str>, threshold: i64) -> Result<()> {
 // The predicate
 // ============================================================================
 
-fn holdings_module() -> Result<Arc<Module>> {
-    let module = load_module(HOLDINGS_PODLANG, "holdings", &Params::default(), &[])
-        .map_err(|err| anyhow!("holdings.podlang does not compile: {err}"))?;
-    Ok(Arc::new(module))
-}
 
 fn holds_ref(module: &Module) -> CustomPredicateRef {
     module
@@ -263,8 +260,6 @@ struct ItemFile {
 #[serde(rename_all = "camelCase")]
 struct ItemMetadata {
     class: ClassName,
-    status: String,
-    creation_proof: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -274,117 +269,9 @@ struct ClassName {
     plugin_name: String,
 }
 
-/// Proof that an object's commitment sits at `index` of the created array of
-/// `header`. The driver's `CreationProof` (crate-private there), decoded from
-/// the same base64 form: version byte, block number, block timestamp, block
-/// hash, created root, nullifiers root, prior state history root, index, then
-/// the Merkle siblings from the root down; integers little-endian i64, hashes
-/// 32 bytes each.
-struct CreationProof {
-    header: StateHeader,
-    index: i64,
-    proof: MerkleProof,
-}
-
-fn decode_creation_proof(encoded: &str) -> Result<CreationProof> {
-    const HASH: usize = 32;
-    const I64: usize = 8;
-    const FIXED: usize = 1 + 2 * I64 + 4 * HASH + I64;
-    let bytes = STANDARD
-        .decode(encoded)
-        .map_err(|err| anyhow!("creation proof is not base64: {err}"))?;
-    ensure!(
-        bytes.len() >= FIXED && (bytes.len() - FIXED).is_multiple_of(HASH),
-        "creation proof has an invalid length of {} bytes",
-        bytes.len()
-    );
-    ensure!(bytes[0] == 1, "creation proof has unknown version {}", bytes[0]);
-    let i64_at = |at: usize| i64::from_le_bytes(bytes[at..at + I64].try_into().unwrap());
-    let hash_at = |at: usize| db_bytes_to_hash(&bytes[at..at + HASH]);
-    let mut at = 1;
-    let block_number = i64_at(at);
-    at += I64;
-    let block_timestamp = i64_at(at);
-    at += I64;
-    let mut hashes = Vec::new();
-    for _ in 0..4 {
-        hashes.push(hash_at(at)?);
-        at += HASH;
-    }
-    let index = i64_at(at);
-    at += I64;
-    let siblings = bytes[at..]
-        .chunks(HASH)
-        .map(db_bytes_to_hash)
-        .collect::<Result<Vec<_>>>()?;
-    let proof: MerkleProof = serde_json::from_value(serde_json::json!({
-        "existence": true,
-        "siblings": siblings,
-        "other_leaf": null,
-    }))?;
-    Ok(CreationProof {
-        header: StateHeader::new(
-            block_number,
-            block_timestamp,
-            hashes[0],
-            hashes[1],
-            hashes[2],
-            hashes[3],
-        ),
-        index,
-        proof,
-    })
-}
-
-fn read_item(path: &Path) -> Result<(ItemFile, CreationProof)> {
-    let item: ItemFile = serde_json::from_str(
-        &fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
-    )
-    .with_context(|| format!("{} is not an item file", path.display()))?;
-    ensure!(
-        item.metadata.class.plugin_name == "bitcraft",
-        "{} is not a Bitcraft item",
-        path.display()
-    );
-    let encoded = item.metadata.creation_proof.as_deref().with_context(|| {
-        format!(
-            "{} has no creation proof yet (its transaction has not landed)",
-            path.display()
-        )
-    })?;
-    let creation = decode_creation_proof(encoded)?;
-    // Checked here for a clear message; the circuit checks it again.
-    if std::env::var_os("HOLDINGS_SKIP_PRECHECK").is_none() {
-        let index = usize::try_from(creation.index)?;
-        Array::verify(
-            creation.header.created_root,
-            &creation.proof,
-            index,
-            &Value::from(item.obj.commitment()),
-        )
-        .map_err(|err| {
-            anyhow!(
-                "{}: its creation proof does not place it in the created set: {err}",
-                path.display()
-            )
-        })?;
-    }
-    Ok((item, creation))
-}
-
 // ============================================================================
 // prove
 // ============================================================================
-
-/// What the verifier needs beside the pod to look a claim up: the block whose
-/// state root the claim is grounded in. Not trusted: the verifier checks the
-/// root the pod states against the synchronizer's root at that block.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RootHint {
-    state_root: String,
-    block_number: i64,
-}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -392,72 +279,38 @@ struct ProofFile {
     version: u32,
     /// Display only; the binding is each pod's public `Equal(player, player)`.
     player: String,
-    roots: Vec<RootHint>,
+    /// The state every claim is about, and its execution block, where the
+    /// verifier looks the root up. Not trusted: the verifier checks that each
+    /// claim states this root and that it is the network's at the block.
+    state_root: String,
+    block_number: i64,
     /// One MainPod per chunk of items: a pod exposes at most
-    /// `max_public_statements` (24) statements and proves at most
-    /// `max_medium` (10) created-array memberships.
+    /// `max_public_statements` (24) statements.
     pods: Vec<MainPod>,
 }
 
-/// Proves `Holds` for one item and returns the public statement.
-fn prove_holds(ctx: &mut BuildContext, obj: &Dictionary, creation: &CreationProof) -> Result<Statement> {
-    let header = creation.header.array();
-    let st_created = ctx.builder.priv_op(Operation(
-        OperationType::Native(NativeOperation::ArrayContainsFromEntries),
-        vec![
-            Value::from(creation.header.created_root).into(),
-            Value::from(creation.index).into(),
-            Value::from(obj.clone()).into(),
-        ],
-        OperationAux::MerkleProof(creation.proof.clone()),
-    ))?;
-    // Bind the created root to slot `created` of the state header record.
-    let st_created = ctx.builder.priv_op(Operation::replace_value_with_entry(
-        vec![
-            Some(entry(&header, STATE_HEADER_CREATED_SLOT as i64)?),
-            None,
-            None,
-        ],
-        st_created,
-    ))?;
-
-    let field = |name: &str| -> Result<Value> {
-        obj.get(&StrKey::from(name))?
-            .with_context(|| format!("the item has no {name} field"))
-    };
-    let type_value = field("type")?;
+/// Proves `Holds` for one item live at `header` and returns the public
+/// statement.
+fn prove_holds(ctx: &mut BuildContext, header: &StateHeader, item: &LiveObject) -> Result<Statement> {
+    let obj = &item.obj;
+    let (st_live, _tag) = prove_live_object(ctx, header, item)?;
+    let type_value = field(obj, "type")?;
     let st_type = ctx
         .builder
         .priv_op(op!(DictContains(obj, "type", type_value)))?;
-
-    let key_hash = hash_values(&[Value::from(obj.commitment()), field("key")?]);
-    let st_key_hash = ctx
-        .builder
-        .priv_op(op!(Hash(obj, entry(obj, "key")?, key_hash)))?;
-    let nullifier = hash_values(&[Value::from(key_hash), Value::from(NULLIFIER_VERSION)]);
-    ensure!(
-        nullifier == txlib::object_nullifier_hash(obj)?,
-        "nullifier differs from txlib's"
-    );
-    let st_nullifier = ctx
-        .builder
-        .priv_op(op!(Hash(key_hash, NULLIFIER_VERSION, nullifier)))?;
-
-    let tag = hash_values(&[field("stable_identifier")?, Value::from(TAG_VERSION)]);
-    let st_tag = ctx.builder.priv_op(op!(Hash(
-        entry(obj, "stable_identifier")?,
-        TAG_VERSION,
-        tag
-    )))?;
-
-    ctx.apply_custom_pred_simple(
-        true,
-        "Holds",
-        vec![st_created, st_type, st_key_hash, st_nullifier, st_tag],
-    )
+    ctx.apply_custom_pred_simple(true, "Holds", vec![st_live, st_type])
 }
 
-fn prove(player: &str, out: &Path, items: &[PathBuf], mock: bool, chunk: usize) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn prove(
+    player: &str,
+    sync: &str,
+    block: Option<i64>,
+    out: &Path,
+    items: &[PathBuf],
+    mock: bool,
+    chunk: usize,
+) -> Result<()> {
     ensure!(chunk >= 1, "--chunk must be at least 1");
     let params = Params::default();
     let (vd_set, prover): (VDSet, Box<dyn MainPodProver>) = if mock {
@@ -467,31 +320,40 @@ fn prove(player: &str, out: &Path, items: &[PathBuf], mock: bool, chunk: usize) 
     };
     let module = holdings_module()?;
 
-    let mut roots: BTreeMap<String, i64> = BTreeMap::new();
+    // One state for every item: the synchronizer's proofs that each was
+    // created, and is unspent, there.
+    let files = items.iter().map(|p| read_item(p)).collect::<Result<Vec<_>>>()?;
+    let objects: Vec<Dictionary> = files.iter().map(|f| f.obj.clone()).collect();
+    let witness = fetch_witness(sync, block, &objects)?;
+    let header = witness.header();
+    eprintln!(
+        "state  {} at block {}",
+        encode_hash_hex(&witness.state_root),
+        witness.block_number
+    );
+    let mut live = Vec::new();
+    let mut skipped = 0;
+    for ((path, file), item) in items.iter().zip(&files).zip(live_objects(objects, &witness)?) {
+        let name = &file.metadata.class.name;
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        match item {
+            Ok(item) => live.push((name.clone(), file_name, item)),
+            Err(why) => {
+                eprintln!("skip   {name:<10} {file_name}: {why}");
+                skipped += 1;
+            }
+        }
+    }
+    ensure!(!live.is_empty(), "no item is live at block {}", witness.block_number);
+
     let mut pods = Vec::new();
     let all = Instant::now();
-    for (number, paths) in items.chunks(chunk).enumerate() {
-        let mut ctx = BuildContext::new(MultiPodBuilder::new(&params, &vd_set), vec![module.clone()]);
-        for path in paths {
-            let (item, creation) = read_item(path)?;
-            if item.metadata.status != "live" {
-                eprintln!(
-                    "note: {} is {} in its file; proving it anyway",
-                    path.display(),
-                    item.metadata.status
-                );
-            }
-            prove_holds(&mut ctx, &item.obj, &creation)
-                .with_context(|| format!("proving {}", path.display()))?;
-            roots.insert(
-                encode_hash_hex(&creation.header.hash()),
-                creation.header.block_number,
-            );
-            eprintln!(
-                "claim  {:<10} {}",
-                item.metadata.class.name,
-                path.file_name().unwrap_or_default().to_string_lossy()
-            );
+    let chunks = live.len().div_ceil(chunk);
+    for (number, batch) in live.chunks(chunk).enumerate() {
+        let mut ctx = context(MultiPodBuilder::new(&params, &vd_set), module.clone())?;
+        for (name, file_name, item) in batch {
+            prove_holds(&mut ctx, &header, item).with_context(|| format!("proving {file_name}"))?;
+            eprintln!("claim  {name:<10} {file_name}");
         }
         ctx.builder
             .pub_op(op!(Equal(Value::from(player), Value::from(player))))?;
@@ -508,10 +370,9 @@ fn prove(player: &str, out: &Path, items: &[PathBuf], mock: bool, chunk: usize) 
             .clone();
         pod.pod.verify().map_err(|err| anyhow!("own proof fails: {err}"))?;
         eprintln!(
-            "pod {} of {}: {} item(s) in {:.1} s",
+            "pod {} of {chunks}: {} item(s) in {:.1} s",
             number + 1,
-            items.len().div_ceil(chunk),
-            paths.len(),
+            batch.len(),
             started.elapsed().as_secs_f64()
         );
         pods.push(pod);
@@ -521,20 +382,15 @@ fn prove(player: &str, out: &Path, items: &[PathBuf], mock: bool, chunk: usize) 
     let file = ProofFile {
         version: FILE_VERSION,
         player: player.to_string(),
-        roots: roots
-            .into_iter()
-            .map(|(state_root, block_number)| RootHint {
-                state_root,
-                block_number,
-            })
-            .collect(),
+        state_root: encode_hash_hex(&witness.state_root),
+        block_number: witness.block_number,
         pods,
     };
     let json = serde_json::to_string(&file)?;
     fs::write(out, &json)?;
     eprintln!(
-        "proved {} item(s) in {} pod(s) in {proving:.1} s{}; {} bytes in {}",
-        items.len(),
+        "proved {} item(s) in {} pod(s) in {proving:.1} s{}, skipped {skipped} not live; {} bytes in {}",
+        live.len(),
         file.pods.len(),
         if mock { " (mock)" } else { "" },
         json.len(),
@@ -547,14 +403,16 @@ fn prove(player: &str, out: &Path, items: &[PathBuf], mock: bool, chunk: usize) 
 /// the MainPod's JSON. That is the input of pod2-onchain's `wrap`, which turns
 /// it into a proof a contract can check: a contract reads a pod's one public
 /// statement, so this pod names no player.
-fn onchain_pod(out: &Path, item: &Path) -> Result<()> {
+fn onchain_pod(sync: &str, block: Option<i64>, out: &Path, path: &Path) -> Result<()> {
+    let record = read_item(path)?;
+    let witness = fetch_witness(sync, block, std::slice::from_ref(&record.obj))?;
+    let item = live_objects(vec![record.obj.clone()], &witness)?
+        .pop()
+        .context("no witness for the item")?
+        .map_err(|why| anyhow!("{} is {why} (block {})", path.display(), witness.block_number))?;
     let params = Params::default();
-    let mut ctx = BuildContext::new(
-        MultiPodBuilder::new(&params, &DEFAULT_VD_SET),
-        vec![holdings_module()?],
-    );
-    let (record, creation) = read_item(item)?;
-    prove_holds(&mut ctx, &record.obj, &creation)?;
+    let mut ctx = context(MultiPodBuilder::new(&params, &DEFAULT_VD_SET), holdings_module()?)?;
+    prove_holds(&mut ctx, &witness.header(), &item)?;
     let solution = ctx.builder.solve().map_err(|err| anyhow!(err))?;
     let started = Instant::now();
     let pod = solution
@@ -570,11 +428,11 @@ fn onchain_pod(out: &Path, item: &Path) -> Result<()> {
     );
     fs::write(out, serde_json::to_string(&pod)?)?;
     eprintln!(
-        "proved one {} in {:.1} s against state root {} (block {}); pod in {}",
+        "proved one {} live at state root {} (block {}) in {:.1} s; pod in {}",
         record.metadata.class.name,
+        encode_hash_hex(&witness.state_root),
+        witness.block_number,
         started.elapsed().as_secs_f64(),
-        encode_hash_hex(&creation.header.hash()),
-        creation.header.block_number,
         out.display()
     );
     Ok(())
@@ -628,9 +486,7 @@ fn classes(pexe_path: &Path) -> Result<()> {
 // ============================================================================
 
 struct Claim {
-    state_root: Hash,
     class: Hash,
-    nullifier: Hash,
     tag: Hash,
 }
 
@@ -657,6 +513,8 @@ fn verify(pexe_path: &Path, sync: Option<&str>, path: &Path) -> Result<()> {
         .with_context(|| format!("{} is not a holdings proof", path.display()))?;
     ensure!(file.version == FILE_VERSION, "unknown proof file version {}", file.version);
     ensure!(!file.pods.is_empty(), "the proof has no pods");
+    let state_root = decode_hash_hex(&file.state_root)
+        .with_context(|| format!("{} is not a state root", file.state_root))?;
     let module = holdings_module()?;
     let holds = holds_ref(&module);
     let mut players: HashSet<String> = HashSet::new();
@@ -688,13 +546,16 @@ fn verify(pexe_path: &Path, sync: Option<&str>, path: &Path) -> Result<()> {
                 Statement::Custom(cpr, args)
                     if cpr.batch.id() == holds.batch.id() && cpr.index == holds.index =>
                 {
-                    ensure!(args.len() == 4, "a Holds claim has {} arguments", args.len());
+                    ensure!(args.len() == 3, "a Holds claim has {} arguments", args.len());
                     let hash = |i: usize| literal(&args[i]).map(|value| Hash::from(value.raw()));
+                    ensure!(
+                        hash(0)? == state_root,
+                        "a claim is about another state than the file's {}",
+                        file.state_root
+                    );
                     claims.push(Claim {
-                        state_root: hash(0)?,
                         class: hash(1)?,
-                        nullifier: hash(2)?,
-                        tag: hash(3)?,
+                        tag: hash(2)?,
                     });
                 }
                 Statement::Equal(ValueRef::Literal(a), ValueRef::Literal(b))
@@ -724,58 +585,29 @@ fn verify(pexe_path: &Path, sync: Option<&str>, path: &Path) -> Result<()> {
     let values: serde_json::Value = serde_json::from_str(INVENTORY_VALUES)?;
 
     // Each object once.
-    let mut seen_nullifiers = HashSet::new();
     let mut seen_tags = HashSet::new();
     for claim in &claims {
-        ensure!(seen_nullifiers.insert(claim.nullifier), "an item is claimed twice");
         ensure!(seen_tags.insert(claim.tag), "an object is claimed twice");
     }
 
-    // The network's view: real state roots, and nothing spent.
-    let mut spent: HashSet<Hash> = HashSet::new();
-    let mut head = None;
+    // The network's view: the state root is the chain's at the block. Every
+    // claim proved its item created and unspent there.
+    let mut slot = None;
     if let Some(sync) = sync {
-        let client = reqwest::blocking::Client::new();
-        let hints: HashMap<&str, i64> = file
-            .roots
-            .iter()
-            .map(|hint| (hint.state_root.as_str(), hint.block_number))
-            .collect();
-        let roots: HashSet<Hash> = claims.iter().map(|claim| claim.state_root).collect();
-        for root in roots {
-            let hex = encode_hash_hex(&root);
-            let block = *hints
-                .get(hex.as_str())
-                .with_context(|| format!("no block given for state root {hex}"))?;
-            let url = format!("{}/v1/state/by_el/{block}", sync.trim_end_matches('/'));
-            let state: StateHeadResponse = client
-                .get(&url)
-                .send()?
-                .error_for_status()
-                .with_context(|| format!("no state at block {block}"))?
-                .json()?;
-            ensure!(
-                state.state_root == root,
-                "state root {hex} is not the network's at block {block}"
-            );
-        }
-        let url = format!("{}/v1/state/membership", sync.trim_end_matches('/'));
-        let request = MembershipRequest {
-            object_commitments: vec![],
-            nullifiers: claims.iter().map(|claim| claim.nullifier).collect(),
-        };
-        let response: MembershipResponse = client
-            .post(&url)
-            .json(&request)
+        let url = format!("{}/v1/state/by_el/{}", sync.trim_end_matches('/'), file.block_number);
+        let state: StateHeadResponse = reqwest::blocking::Client::new()
+            .get(&url)
             .send()?
-            .error_for_status()?
+            .error_for_status()
+            .with_context(|| format!("no state at block {}", file.block_number))?
             .json()?;
-        for entry in response.nullifier_results {
-            if entry.present {
-                spent.insert(entry.nullifier);
-            }
-        }
-        head = Some(response.block_number);
+        ensure!(
+            state.state_root == state_root,
+            "state root {} is not the network's at block {}",
+            file.state_root,
+            file.block_number
+        );
+        slot = Some(state.slot);
     }
 
     println!("player   {player}");
@@ -783,9 +615,17 @@ fn verify(pexe_path: &Path, sync: Option<&str>, path: &Path) -> Result<()> {
         "proof    valid: {} real MainPod(s), verified in {verifying:.2} s",
         file.pods.len()
     );
-    match head {
-        Some(block) => println!("network  checked at block {block}"),
-        None => println!("network  not checked (--offline): roots and spends unverified"),
+    match slot {
+        Some(slot) => {
+            let at = SEPOLIA_GENESIS_TIME + 12 * u64::from(slot);
+            let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+            println!(
+                "network  every item live at block {} (slot {slot}, {} min before this check)",
+                file.block_number,
+                now.saturating_sub(at) / 60
+            );
+        }
+        None => println!("network  not checked (--offline): the state root is unverified"),
     }
     let mut total = 0.0;
     for claim in &claims {
@@ -795,16 +635,14 @@ fn verify(pexe_path: &Path, sync: Option<&str>, path: &Path) -> Result<()> {
             .cloned()
             .unwrap_or_else(|| format!("unknown type {}", encode_hash_hex(&claim.class)));
         let value = class_value(&values, &name);
-        let status = if spent.contains(&claim.nullifier) {
-            "SPENT, not counted".to_string()
-        } else if value.is_none() {
-            "value depends on fields Holds does not prove; not counted".to_string()
-        } else if head.is_some() {
-            "live".to_string()
+        let status = if value.is_none() {
+            "value depends on fields Holds does not prove; not counted"
+        } else if slot.is_some() {
+            "live"
         } else {
-            "unchecked".to_string()
+            "unchecked"
         };
-        let counted = !spent.contains(&claim.nullifier) && value.is_some();
+        let counted = value.is_some();
         println!(
             "  {name:<12} {:>12} BIT  tag {}  {status}",
             value.map(|v| format!("{v:.0}")).unwrap_or("-".into()),
@@ -816,4 +654,106 @@ fn verify(pexe_path: &Path, sync: Option<&str>, path: &Path) -> Result<()> {
     }
     println!("total    {total:.0} BIT");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pod2::middleware::StrKey;
+
+    use super::*;
+    use crate::live::{
+        nullifier_of, tag_of,
+        testing::{State, object},
+    };
+
+    fn emerald(key: i64) -> Dictionary {
+        let class = bounty::gems()
+            .unwrap()
+            .into_iter()
+            .find(|gem| gem.name == "Emerald")
+            .unwrap()
+            .class;
+        object(class, key)
+    }
+
+    /// Proves `Holds` for `items` with the mock prover, which checks every
+    /// operation, and returns the pod's public statements.
+    fn holds(state: &State, items: &[LiveObject]) -> Result<Vec<Statement>> {
+        let params = Params::default();
+        let mut ctx = context(MultiPodBuilder::new(&params, &VDSet::new(&[])), holdings_module()?)?;
+        for item in items {
+            prove_holds(&mut ctx, &state.header, item)?;
+        }
+        let pod = ctx
+            .builder
+            .solve()
+            .map_err(|err| anyhow!(err))?
+            .prove(&MockProver {})
+            .map_err(|err| anyhow!(err))?
+            .output_pod()
+            .clone();
+        pod.pod.verify().map_err(|err| anyhow!("{err}"))?;
+        Ok(pod.pod.pub_statements())
+    }
+
+    fn args(statement: &Statement) -> Vec<Hash> {
+        match statement {
+            Statement::Custom(_, args) => args
+                .iter()
+                .map(|arg| Hash::from(literal(arg).unwrap().raw()))
+                .collect(),
+            other => panic!("not a Holds claim: {other}"),
+        }
+    }
+
+    #[test]
+    fn a_live_item_is_claimed_without_its_nullifier() -> Result<()> {
+        let one = emerald(1);
+        let two = emerald(2);
+        let state = State::new(&[one.clone(), two.clone()], &[]);
+        let statements = holds(&state, &[state.live(&one), state.live(&two)])?;
+        assert_eq!(statements.len(), 2);
+        for (statement, obj) in statements.iter().zip([&one, &two]) {
+            let args = args(statement);
+            let class = Hash::from(field(obj, "type")?.raw());
+            assert_eq!(args, vec![state.header.hash(), class, tag_of(obj)?]);
+            assert!(!args.contains(&nullifier_of(obj)?), "the nullifier is public");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_spent_item_cannot_be_claimed() -> Result<()> {
+        let spent = emerald(1);
+        let state = State::new(std::slice::from_ref(&spent), std::slice::from_ref(&spent));
+        // its nullifier is in the set: the only proof there is is of presence
+        assert!(state.is_spent(&spent));
+        assert!(holds(&state, &[state.live(&spent)]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn an_item_not_in_the_state_cannot_be_claimed() -> Result<()> {
+        let real = emerald(1);
+        let state = State::new(std::slice::from_ref(&real), &[]);
+        // a made-up item, given the real one's place in the created array
+        let mut forged = state.live(&real);
+        forged.obj = emerald(2);
+        assert!(holds(&state, &[forged]).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn a_re_keyed_item_is_claimed_only_in_its_new_state_with_the_same_tag() -> Result<()> {
+        // Rekey consumes the old state (its nullifier is recorded) and creates
+        // one with a new key and the same stable identifier
+        let old = emerald(1);
+        let mut new = old.clone();
+        new.update(&StrKey::from("key"), &Value::from(99))?;
+        let state = State::new(&[old.clone(), new.clone()], std::slice::from_ref(&old));
+        assert!(holds(&state, &[state.live(&old)]).is_err(), "the old key still claims it");
+        let statements = holds(&state, &[state.live(&new)])?;
+        assert_eq!(args(&statements[0])[2], tag_of(&old)?);
+        Ok(())
+    }
 }

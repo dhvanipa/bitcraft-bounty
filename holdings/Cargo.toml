@@ -9,7 +9,6 @@ license.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
-base64 = "0.22"
 payload = { path = "../../libs/payload" }
 pexe = { path = "../../libs/pexe" }
 pod2 = { workspace = true }
