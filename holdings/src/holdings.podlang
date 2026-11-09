@@ -1,0 +1,33 @@
+/*
+  holdings: a claim to hold a Bitcraft item, proved without showing the item.
+
+  Holds(state_header, type, nullifier, tag) says the prover knows an object
+  state `obj` such that:
+
+  - its commitment is in the created array of `state_header`, whose hash is a
+    state root. The synchronizer only adds commitments from valid
+    `TxFinalized` proofs, so a valid transaction made `obj`, under the rules
+    of the class whose `Is<Class>` predicate hash is `type`;
+  - `nullifier` is the spend tag the network records when `obj` is consumed,
+    H(H(obj, obj.key), "txlib-nullifier-v1") as in txlib.podlang. Only a
+    holder of `obj.key` can compute it;
+  - `tag` is H(obj.stable_identifier, "bitcraft-holdings-v1"). Every state of
+    an object keeps its stable_identifier (TxInsert stamps it, TxMutate and
+    Rekey keep it), so the tag stays the same when the object is re-keyed or
+    changed, and a leaderboard can count each object once.
+
+  Whether `obj` is still live is for the verifier to ask the network: it is
+  live while `nullifier` is not in the nullifier set.
+
+  The StateHeader record matches txlib's (txlib.podlang, `record StateHeader`).
+*/
+
+record StateHeader = (block_number, block_timestamp, block_hash, created, nullifiers, prior_state_history)
+
+Holds(state_header StateHeader, type, nullifier, tag, private: obj, index, obj_key_hash) = AND(
+  ArrayContains(state_header.created, index, obj)
+  DictContains(obj, "type", type)
+  Hash(obj, obj.key, obj_key_hash)
+  Hash(obj_key_hash, "txlib-nullifier-v1", nullifier)
+  Hash(obj.stable_identifier, "bitcraft-holdings-v1", tag)
+)
