@@ -170,32 +170,40 @@ each one
 - is live at `state_header`, as in `Holds` (`LiveObject`): in its created
   array, and unspent there, its nullifier absent from its nullifier set by a
   Merkle proof of absence;
-- is a gem: `H(type, value)` is in a set with one entry per gem class and its
-  value in BIT, so the value is the gem's (`LiveGem`);
+- is worth `value` by the Bitcraft app's own rules (`ItemValue`):
 
-and their values add up to at least `threshold` (`GemsTotal`, one step per
-gem; `SetInsert` of each object's tag, which stays private here, requires it
-to be new, so no object counts twice). `state_header` is the state's header record, whose hash is the
-synchronizer's `state_root`. `recipient` is the address the bounty pays, as 4
-limbs of 40 bits, made public so a copied proof pays the same address.
+  | Kind | Classes | Value |
+  |---|---|---|
+  | machine (`LeveledValue`) | Quarry, MiningDrill, Pumpjack | its table's value at its `level`, 1 to 10 |
+  | bucket (`BucketValue`) | the six buckets, BarrelOfOil | base + per-unit value × `n` |
+  | axe (`AxeValue`) | WoodAxe, StoneAxe, IronAxe | full value × `durability` / 100 |
+  | anything else (`FixedValue`) | gems, materials, Stick, Coal, Bit | its table's value |
 
-The gem table ([src/bounty.rs](src/bounty.rs), `GEMS`):
+and their values add up to at least `threshold` (`ItemsTotal`, one step per
+item; `SetInsert` of each object's tag, which stays private here, requires
+it to be new, so no object counts twice). `state_header` is the state's
+header record, whose hash is the synchronizer's `state_root`. `recipient` is
+the address the bounty pays, as 4 limbs of 40 bits, made public so a copied
+proof pays the same address.
 
-| Gem | BIT |
-|---|---:|
-| Quartz | 100 |
-| Amethyst | 2,000 |
-| Sapphire | 40,000 |
-| Emerald | 800,000 |
-| Ruby | 16,000,000 |
-| Diamond | 320,000,000 |
+The rules are those of the app's Total Inventory Value
+(`apps/bitcraft/src-tauri/src/metrics.rs`, `object_value`), and bounty.rs
+reads the values from the app's own `inventory-values.json` at the game
+commit holdings is built from. Values count in **centi-BIT** (1/100 BIT): a
+Stick is 0.5 BIT, a MiningDrill at level 1 67.5 BIT and an IronAxe at
+durability 37 3.33 BIT, all whole numbers of centi-BIT. Each class is in
+exactly one of four tables, sets of hashes of the class with its values,
+written into the predicate, so each item has one value and the predicate's
+hash commits to every value. Pocketknife and Geode are worth nothing and
+can't be claimed.
 
 ```bash
-holdings bounty-info --threshold 50000000
+holdings bounty-info --threshold 50000000 --pexe ~/.bitcraft/actions/bitcraft.pexe
 ```
 
-prints the `BountyClaim` predicate's hash (it commits to the gem table) and
-the threshold packed as the contract reads them (and a recipient, with `--recipient`).
+prints the `BountyClaim` predicate's hash, the threshold in centi-BIT packed
+as the contract reads it (and a recipient's, with `--recipient`), and each
+class's rule; with `--pexe` it checks the 27 class hashes against the plugin.
 
 ```bash
 holdings bounty-pod --sync http://127.0.0.1:3000 --block BLOCK \
@@ -207,8 +215,20 @@ execution block `BLOCK` (a block whose root the contract holds:
 `rootBlock(root)`). It needs a synchronizer with the witness endpoint
 ([../synchronizer/](../synchronizer/README.md)), which gives each item's
 creation proof and nullifier absence proof at that block; the hosted
-synchronizer has none. It refuses a spent item, an item not created by then,
-a non-gem, the same object twice, and a total below the threshold.
+synchronizer has none. It skips, with a note, items spent or not yet created
+there and items worth nothing, prints the claim by class, and refuses the
+same object twice and a total below the threshold.
+
+On 2026-11-09 (M3 Pro, the Mac helper on medium) 19 real items of every
+kind, live at block 12098545, proved at a threshold of exactly their value,
+2,487,006 BIT, in 102 s and 4.1 GB: 397 statements in 7 pods. A Python
+reimplementation of the app's rules, run over the same item files, gave the
+same total. The mock-prover tests check the app's own cases (a Quarry at
+level 3 is 140 BIT, a BucketOfIron with 10 units 55 BIT, an IronAxe at
+durability 50 4.5 BIT), a claim with every kind, and that a gem at another
+gem's value, a machine at another level's value, a bucket with more
+contents, an unworn axe, or a class valued by another table's rule is
+refused.
 
 ## What a leaderboard still needs
 

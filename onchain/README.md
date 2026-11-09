@@ -2,8 +2,9 @@
 
 Verifying `holdings` proofs on Ethereum: one item's `Holds` claim
 ([src/HoldsCheck.sol](src/HoldsCheck.sol)), and a bounty that pays its whole
-token balance to whoever first proves they hold unspent gems worth at least a
-threshold of BIT ([src/BountyEscrow.sol](src/BountyEscrow.sol)).
+token balance to whoever first proves they hold unspent Bitcraft items worth
+at least a threshold of BIT, as the Bitcraft app values them, at a state root
+posted in the last 24 hours ([src/BountyEscrow.sol](src/BountyEscrow.sol)).
 
 The proof is wrapped twice. pod2's MainPod proof is plonky2 over Goldilocks,
 which is far too expensive to check in the EVM. pod2-onchain first proves,
@@ -45,7 +46,8 @@ unchanged.
 | Step | Time | Peak memory | Output |
 |---|---:|---:|---|
 | `holdings onchain-pod`, one Emerald | 7.9 s | 3.4 GB | 223 kB pod |
-| `holdings bounty-pod`, three Emeralds | 7.6 s | 3.4 GB | 232 kB pod |
+| `holdings bounty-pod`, three Emeralds (the gem-only claim) | 7.6 s | 3.4 GB | 232 kB pod |
+| `holdings bounty-pod`, 19 items of every kind | 102 s, 397 statements in 7 pods | 4.1 GB | |
 | `wrap` (wrapper circuit 2^13 rows) | 14.3 to 14.5 s; 11.7 s on a quieter Mac, of which 7.7 s proving | 1.6 GB | 617 kB proof JSON |
 | Groth16 circuit compile | 26 s | | 5,566,502 constraints, 24 public inputs, 322 MB R1CS |
 | Groth16 setup (once per circuit) | 552 s | 13.7 GB | 1.36 GB proving key, 1.3 kB verifying key, 45 kB `Verifier.sol` |
@@ -64,7 +66,7 @@ On-chain (Foundry, `forge test -vv`):
 |---|---:|
 | `Verifier.verifyProof` | 543,110 |
 | `HoldsCheck.check` (input checks, root lookup, verify) | 548,057 |
-| `BountyEscrow.claim`, real proof, paying a mock token | 597,295 |
+| `BountyEscrow.claim`, real proof, paying a mock token | 597,422 |
 
 The 24 public inputs cost about a quarter of that: each is a scalar
 multiplication in the verifier. A bounty statement with fewer or packed
@@ -99,9 +101,13 @@ The new verifier rejects the proof made under the old setup
 
 A claim is a wrapped `BountyClaim(state_header, recipient, threshold)`
 ([../holdings/src/bounty.podlang](../holdings/src/bounty.podlang)): the
-prover holds gems, each in the created array of `state_header` and unspent
+prover holds items, each in the created array of `state_header` and unspent
 there (its nullifier is absent from the nullifier set), each a different
-object, worth at least `threshold` BIT together. The state header's hash is
+object, worth at least `threshold` together by the Bitcraft app's rules
+(machines by level, buckets by contents, axes by durability, everything else
+by class; see [../holdings/](../holdings/README.md#a-bounty-claim)). Values
+and the threshold are in centi-BIT (1/100 BIT), so 50,000,000 BIT is
+5,000,000,000. The state header's hash is
 the synchronizer's `state_root`. `holdings bounty-pod` proves it, and
 `holdings bounty-info` prints what the contract is deployed with.
 
@@ -112,10 +118,14 @@ verifier:
 - every input is below the Goldilocks modulus, so each claim has one
   encoding;
 - input 0..3 is the `BountyClaim` predicate's hash (fixed at deployment; it
-  commits to the gem table and to holdings.podlang, which it imports, so a
-  claim with other values or another `LiveObject` doesn't match);
-- input 4..7 is a state root the poster posted;
-- input 12..15 is the threshold, as a pod2 integer (fixed at deployment);
+  commits to every class's value and to holdings.podlang, which it imports,
+  so a claim with other values or another `LiveObject` doesn't match);
+- input 4..7 is a state root the poster posted, at most 24 hours ago
+  (`ROOT_LIFETIME`): a claim shows items held within the last day, not at
+  any time since deployment. An item made a week ago still counts, as long
+  as it is unspent at that recent root;
+- input 12..15 is the threshold in centi-BIT, as a pod2 integer (fixed at
+  deployment);
 - input 16..23 (the unused arguments) is zero;
 - input 8..11 is the recipient, 4 limbs of 40 bits, least significant first,
   and not zero;
@@ -134,16 +144,19 @@ a key on the synchronizer's box
 Sepolia's finalized block each hour.
 
 `test/BountyEscrowProof.t.sol` runs a real claim through the real verifier:
-three Emeralds (2,400,000 BIT) live at Sepolia block 12098387, proved on
-2026-11-09 against our synchronizer. Its 5 tests check that the 24 inputs are
-the claim (predicate, root, recipient, threshold, zero unused arguments),
-that the claim pays the recipient whoever sends it, that it needs its root
-posted, that a 50,000,000 BIT bounty refuses it, and that changing the
-recipient fails the proof.
+19 items of every kind (3 Emeralds, 2 Sapphires, 2 Amethysts, 2 Quartz, Wood,
+4 buckets, 2 MiningDrills, 3 IronAxes) live at Sepolia block 12098545, worth
+exactly 2,487,006 BIT, proved on 2026-11-09 against our synchronizer at that
+threshold. Its 6 tests check that the 24 inputs are the claim (predicate,
+root, recipient, threshold, zero unused arguments), that the claim pays the
+recipient whoever sends it, that it needs its root posted and fails once the
+root is over 24 hours old, that a 50,000,000 BIT bounty refuses it, and that
+changing the recipient fails the proof.
 
-The tests (`test/BountyEscrow.t.sol`, 17, with a mock verifier and token)
+The tests (`test/BountyEscrow.t.sol`, 19, with a mock verifier and token)
 cover a paid claim; the recipient named by the proof, not the sender, being
-paid; one claim only; an invalid proof; a root not posted; another predicate;
+paid; one claim only; an invalid proof; a root not posted; a root exactly 24
+hours old (taken) and one a second older (refused); another predicate;
 a lower threshold; a non-zero unused argument; a non-canonical input; a
 recipient limb over 40 bits; the zero recipient; nothing to pay; a claim after
 the deadline; roots posted by anyone but the poster, the owner included;
@@ -157,9 +170,9 @@ cd onchain && forge test -vv
 ```
 
 `test/fixtures/emerald_calldata.json` is a real Emerald's `Holds` proof and
-`test/fixtures/bounty_calldata.json` a real three-Emerald `BountyClaim`, both
-live at block 12098387, and `src/Verifier.sol` the verifier from the setup
-they were proved with. 29 tests pass on 2026-11-09.
+`test/fixtures/bounty_calldata.json` a real 19-item `BountyClaim` live at
+block 12098545, and `src/Verifier.sol` the verifier from the setup they were
+proved with. 32 tests pass on 2026-11-09.
 
 ## Deploy on Sepolia
 
@@ -170,8 +183,8 @@ a Foundry keystore account (`cast wallet import`), and `SEPOLIA` an RPC URL.
 
 ```bash
 USDC=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238   # Circle's USDC on Sepolia, 6 decimals (read on-chain 2026-11-09)
-PREDICATE=0x6bbcaa6ace146dae1051817bfe08dd8e0b609ae53bce8aa25638aabff56bb735
-THRESHOLD=0xffffffff00000000000000000000000000000000000000000000000002faf080   # 50,000,000 BIT
+PREDICATE=0xaae74e677f89c82dc523ce1850a26d075d457f85bedbdf35005f3918526a772a
+THRESHOLD=0xffffffff0000000000000000000000000000000000000001000000002a05f200   # 50,000,000 BIT = 5,000,000,000 centi-BIT
 DEADLINE=$(date -d '+30 days' +%s)   # macOS: date -v+30d +%s
 forge create src/Verifier.sol:Verifier --rpc-url $SEPOLIA --account OWNER --broadcast
 forge create src/BountyEscrow.sol:BountyEscrow --rpc-url $SEPOLIA --account OWNER --broadcast \
@@ -187,9 +200,10 @@ Sizes (`forge build --sizes`): `Verifier` 9,355 bytes, `BountyEscrow`
 - **The Groth16 setup here is one machine's.** Whoever ran it can forge
   proofs for this verifier. For a bounty worth more than test tokens, run a
   multi-party setup, or use gnark's PLONK, whose setup is universal.
-- **The poster is trusted.** A made-up state root can commit to made-up gems,
+- **The poster is trusted.** A made-up state root can commit to made-up items,
   so whoever holds the poster's key can take the prize. Our synchronizer
   derives roots from the chain and checks them against the hosted one before
   posting, but the contract can't tell.
-- **A claim proves gems held at one posted root**, up to an hour old, not
-  now. Gems held at a posted root can be spent afterwards and still win.
+- **A claim proves items held at one posted root**, posted within the last
+  24 hours, not now. Items held at that root can be spent afterwards and
+  still win.

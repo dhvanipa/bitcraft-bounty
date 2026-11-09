@@ -1,6 +1,7 @@
 /*
-  bounty: a claim that the prover holds unspent Bitcraft gems worth at least
-  `threshold` BIT at one state root, made for `recipient`.
+  bounty: a claim that the prover holds unspent Bitcraft items worth at least
+  `threshold` at one state root, made for `recipient`. Values are in
+  centi-BIT (1/100 BIT), as the Bitcraft app counts them.
 
   BountyClaim(state_header, recipient, threshold) says the prover knows object
   states, each with a different tag, such that each one
@@ -8,50 +9,94 @@
   - is live at `state_header` (holdings.podlang's LiveObject): in its created
     array, so a valid transaction made it, and unspent there, its nullifier
     absent from its nullifier set;
-  - is a gem: H(obj.type, value) is in GEM_VALUES, which holds one entry per
-    gem class of the Bitcraft plugin (module 0x54548dac8ef1...), its
-    `Is<Class>` predicate hash with its value in BIT (LiveGem);
+  - is worth `value` (ItemValue), by the Bitcraft app's rules
+    (apps/bitcraft/src-tauri/src/metrics.rs, `object_value`, with
+    apps/bitcraft/ui/inventory-values.json):
+    - a machine (Quarry, MiningDrill, Pumpjack) is worth its table's value at
+      its level, 1 to 10 (LeveledValue);
+    - a bucket or barrel is worth its base value plus its contents' value per
+      unit times `n` (BucketValue);
+    - an axe is worth its full value times `durability` / 100; in centi-BIT
+      that is its value in BIT times `durability` (AxeValue);
+    - any other class is worth its table's value (FixedValue);
 
-  and their values add up to at least `threshold` (GemsTotal). The tag
+  and their values add up to at least `threshold` (ItemsTotal). The tag
   (LiveObject's) is the same for every state of one object, so no object
-  counts twice. `recipient` is the address
-  the bounty pays: it is part of the statement, so a copied proof pays the
-  same address.
+  counts twice. `recipient` is the address the bounty pays: it is part of the
+  statement, so a copied proof pays the same address.
 
-  GEM_VALUES is filled in by bounty.rs from its GEMS table, and
-  HOLDINGS_MODULE (holdings.podlang's hash) by live.rs.
+  The four tables are sets of hashes of a class's `Is<Class>` predicate hash
+  with its values. Each class is in exactly one of them, so each item has one
+  value. bounty.rs fills them in from the app's inventory-values.json (at the
+  game commit holdings is built from) and the plugin's class hashes, and
+  live.rs fills in HOLDINGS_MODULE (holdings.podlang's hash).
 */
 
 use module HOLDINGS_MODULE as holdings
 
-LiveGem(state_header holdings::StateHeader, value, tag, private: obj, entry) = AND(
-  holdings::LiveObject(state_header, obj, tag)
+// H(type, value) is in FIXED_VALUES.
+FixedValue(obj, value, private: entry) = AND(
   Hash(obj.type, value, entry)
-  SetContains(GEM_VALUES, entry)
+  SetContains(FIXED_VALUES, entry)
 )
 
-// The total value of a set of live gems with distinct tags.
-GemsTotal(state_header holdings::StateHeader, total, tags) = OR(
-  GemsTotalOne(state_header, total, tags)
-  GemsTotalMore(state_header, total, tags)
+// H(H(type, base), per_unit) is in BUCKET_VALUES; value = base + per_unit * n.
+BucketValue(obj, value, private: base, per_unit, key, entry, contents) = AND(
+  Hash(obj.type, base, key)
+  Hash(key, per_unit, entry)
+  SetContains(BUCKET_VALUES, entry)
+  Product(per_unit, obj.n, contents)
+  Sum(base, contents, value)
 )
 
-GemsTotalOne(state_header holdings::StateHeader, total, tags, private: tag) = AND(
-  LiveGem(state_header, total, tag)
+// H(H(type, level), value) is in LEVELED_VALUES, for levels 1 to 10.
+LeveledValue(obj, value, private: key, entry) = AND(
+  Hash(obj.type, obj.level, key)
+  Hash(key, value, entry)
+  SetContains(LEVELED_VALUES, entry)
+)
+
+// H(type, full_bit) is in AXE_VALUES; value = full_bit * durability.
+AxeValue(obj, value, private: full_bit, entry) = AND(
+  Hash(obj.type, full_bit, entry)
+  SetContains(AXE_VALUES, entry)
+  Product(full_bit, obj.durability, value)
+)
+
+ItemValue(obj, value) = OR(
+  FixedValue(obj, value)
+  BucketValue(obj, value)
+  LeveledValue(obj, value)
+  AxeValue(obj, value)
+)
+
+LiveItem(state_header holdings::StateHeader, value, tag, private: obj) = AND(
+  holdings::LiveObject(state_header, obj, tag)
+  ItemValue(obj, value)
+)
+
+// The total value of a set of live items with distinct tags.
+ItemsTotal(state_header holdings::StateHeader, total, tags) = OR(
+  ItemsTotalOne(state_header, total, tags)
+  ItemsTotalMore(state_header, total, tags)
+)
+
+ItemsTotalOne(state_header holdings::StateHeader, total, tags, private: tag) = AND(
+  LiveItem(state_header, total, tag)
   SetInsert({}, tag, tags)
 )
 
 // SetInsert requires the tag's prior absence: no object counts twice.
-GemsTotalMore(state_header holdings::StateHeader, total, tags,
+ItemsTotalMore(state_header holdings::StateHeader, total, tags,
     private: prev_total, prev_tags, value, tag) = AND(
-  GemsTotal(state_header, prev_total, prev_tags)
-  LiveGem(state_header, value, tag)
+  ItemsTotal(state_header, prev_total, prev_tags)
+  LiveItem(state_header, value, tag)
   Sum(prev_total, value, total)
   SetInsert(prev_tags, tag, tags)
 )
 
 BountyClaim(state_header holdings::StateHeader, recipient, threshold, private: total, tags) = AND(
-  GemsTotal(state_header, total, tags)
+  ItemsTotal(state_header, total, tags)
   GtEq(total, threshold)
   Equal(recipient, recipient)
 )

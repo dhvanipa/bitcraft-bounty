@@ -2,7 +2,7 @@
 
 The bounty contract ([../onchain/src/BountyEscrow.sol](../onchain/src/BountyEscrow.sol))
 takes a claim against a game state root that its poster put on Sepolia. The
-claim proves each gem unspent at that root: its nullifier is absent from the
+claim proves each item unspent at that root: its nullifier is absent from the
 root's nullifier set. Proving that needs a Merkle proof of absence at the
 posted root.
 
@@ -104,7 +104,7 @@ transaction) exits non-zero and shows in
 `systemctl status holdings-root-poster` and its journal.
 
 **The poster key is worth the prize.** The contract trusts the roots it is
-given: a made-up root could commit to made-up gems. Keep the box's SSH key as
+given: a made-up root could commit to made-up items. Keep the box's SSH key as
 safe as the prize, and use the contract's `setPoster` to move the role if the
 box is lost.
 

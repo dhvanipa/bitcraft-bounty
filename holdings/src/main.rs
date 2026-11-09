@@ -72,7 +72,7 @@ fn usage() -> ! {
   holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json
   holdings onchain-pod --sync URL [--block N] --out POD.json ITEM.dobj
   holdings bounty-pod --sync URL [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json ITEM.dobj...
-  holdings bounty-info --threshold BIT [--recipient 0xADDRESS]"
+  holdings bounty-info --threshold BIT [--recipient 0xADDRESS] [--pexe BITCRAFT.pexe]"
     );
     std::process::exit(2)
 }
@@ -133,7 +133,7 @@ fn main() -> Result<()> {
         }
         "bounty-pod" => {
             ensure!(!paths.is_empty(), "no item files given");
-            let threshold = flag("--threshold").parse().context("--threshold takes BIT")?;
+            let threshold = centi_bit(&flag("--threshold"))?;
             bounty_pod(
                 &flag("--sync"),
                 block,
@@ -144,11 +144,27 @@ fn main() -> Result<()> {
             )
         }
         "bounty-info" => {
-            let threshold = flag("--threshold").parse().context("--threshold takes BIT")?;
-            bounty_info(flags.get("--recipient").map(String::as_str), threshold)
+            let threshold = centi_bit(&flag("--threshold"))?;
+            bounty_info(
+                flags.get("--recipient").map(String::as_str),
+                threshold,
+                flags.get("--pexe").map(Path::new),
+            )
         }
         _ => usage(),
     }
+}
+
+/// A BIT amount from the command line, in centi-BIT: the bounty counts in
+/// 1/100 BIT so that every item's value is a whole number.
+fn centi_bit(bit: &str) -> Result<i64> {
+    let bit: f64 = bit.parse().context("--threshold takes BIT")?;
+    let centi = (bit * 100.0).round();
+    ensure!(
+        bit > 0.0 && (centi - bit * 100.0).abs() < 1e-6,
+        "--threshold must be a positive number of BIT with at most 2 decimals"
+    );
+    Ok(centi as i64)
 }
 
 /// An item file, which must be a Bitcraft item's.
@@ -184,7 +200,21 @@ fn bounty_pod(
     let objects = items.iter().map(|p| read_object(p)).collect::<Result<Vec<_>>>()?;
     let witness = fetch_witness(sync, block, &objects)?;
     let header = witness.header();
-    let live = bounty::live_items(objects, &witness)?;
+    let (live, skipped) = bounty::live_items(objects, &witness)?;
+    for (i, name, why) in &skipped {
+        let file = items[*i].file_name().unwrap_or_default().to_string_lossy();
+        eprintln!("skip   {name:<12} {file}: {why}");
+    }
+    ensure!(!live.is_empty(), "no item is live and worth something at block {}", witness.block_number);
+    let mut by_class: std::collections::BTreeMap<&str, (usize, i64)> = Default::default();
+    for item in &live {
+        let entry = by_class.entry(item.name).or_default();
+        entry.0 += 1;
+        entry.1 += item.valued.value();
+    }
+    for (name, (count, centi)) in &by_class {
+        eprintln!("claim  {count:>5} {name:<15} {:>15} BIT", *centi as f64 / 100.0);
+    }
     let params = Params::default();
     let mut ctx = context(MultiPodBuilder::new(&params, &DEFAULT_VD_SET), bounty::bounty_module()?)?;
     let recipient_value = bounty::recipient_value(recipient)?;
@@ -201,9 +231,12 @@ fn bounty_pod(
     ensure!(pod.pod.pub_statements().len() == 1, "the pod has more than one public statement");
     fs::write(out, serde_json::to_string(&pod)?)?;
     eprintln!(
-        "claimed {} gems worth {total} BIT (threshold {threshold}) for {recipient} in {:.1} s, \
+        "claimed {} items worth {} BIT (threshold {} BIT; skipped {}) for {recipient} in {:.1} s, \
          against state root {} (block {}); pod in {}",
         live.len(),
+        total as f64 / 100.0,
+        threshold as f64 / 100.0,
+        skipped.len(),
         started.elapsed().as_secs_f64(),
         encode_hash_hex(&witness.state_root),
         witness.block_number,
@@ -214,22 +247,52 @@ fn bounty_pod(
 
 /// What a bounty contract is deployed with, and checks a claim's public
 /// inputs against: the `BountyClaim` predicate hash, and the threshold's
-/// value (and a recipient's, if given), each packed limb 3 first into 32
-/// bytes as the contract packs them.
-fn bounty_info(recipient: Option<&str>, threshold: i64) -> Result<()> {
+/// value in centi-BIT (and a recipient's, if given), each packed limb 3 first
+/// into 32 bytes as the contract packs them; then each class's value rule.
+/// With a plugin, checks the class hashes against it.
+fn bounty_info(recipient: Option<&str>, threshold: i64, pexe: Option<&Path>) -> Result<()> {
     let module = bounty::bounty_module()?;
     let claim = module
         .predicate_ref_by_name("BountyClaim")
         .expect("bounty.podlang defines BountyClaim");
     let packed = |raw: pod2::middleware::RawValue| encode_hash_hex(&Hash::from(raw));
     println!("BountyClaim predicate  {}", encode_hash_hex(&Predicate::Custom(claim).hash()));
-    println!("threshold {threshold:<13}{}", packed(Value::from(threshold).raw()));
+    println!(
+        "threshold {} BIT = {threshold} centi-BIT  {}",
+        threshold as f64 / 100.0,
+        packed(Value::from(threshold).raw())
+    );
     if let Some(recipient) = recipient {
         println!("recipient {recipient}  {}", packed(bounty::recipient_value(recipient)?.raw()));
     }
-    println!("gems counted:");
-    for gem in bounty::gems()? {
-        println!("  {:<9} {:>11} BIT  class {}", gem.name, gem.value, encode_hash_hex(&gem.class));
+    let rules = bounty::rules()?;
+    println!("values, in BIT, as the Bitcraft app counts them:");
+    for rule in &rules {
+        let bit = |c: &i64| *c as f64 / 100.0;
+        let how = match &rule.rule {
+            bounty::Rule::Fixed { value: 0 } => "nothing; not counted".to_string(),
+            bounty::Rule::Fixed { value } => format!("{}", bit(value)),
+            bounty::Rule::Bucket { base, per_unit } => format!("{} + {} per unit (n)", bit(base), bit(per_unit)),
+            bounty::Rule::Leveled { by_level } => format!(
+                "by level 1 to {}: {}",
+                by_level.len(),
+                by_level.iter().map(|v| bit(v).to_string()).collect::<Vec<_>>().join(", ")
+            ),
+            bounty::Rule::Axe { full_bit } => format!("{full_bit} x durability / 100"),
+        };
+        println!("  {:<15} {how}", rule.name);
+    }
+    if let Some(pexe) = pexe {
+        let plugin = load_plugin(pexe)?;
+        for rule in &rules {
+            ensure!(
+                plugin.classes.get(&rule.class) == Some(&rule.name.to_string()),
+                "{}'s hash in bounty.rs is not the plugin's",
+                rule.name
+            );
+        }
+        ensure!(plugin.classes.len() == rules.len(), "the plugin has classes bounty.rs lacks");
+        println!("all {} class hashes match {}", rules.len(), pexe.display());
     }
     Ok(())
 }
@@ -667,13 +730,7 @@ mod tests {
     };
 
     fn emerald(key: i64) -> Dictionary {
-        let class = bounty::gems()
-            .unwrap()
-            .into_iter()
-            .find(|gem| gem.name == "Emerald")
-            .unwrap()
-            .class;
-        object(class, key)
+        object(bounty::class_hash("Emerald").unwrap(), key)
     }
 
     /// Proves `Holds` for `items` with the mock prover, which checks every
