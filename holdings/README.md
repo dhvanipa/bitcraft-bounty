@@ -219,6 +219,29 @@ synchronizer has none. It skips, with a note, items spent or not yet created
 there and items worth nothing, prints the claim by class, and refuses the
 same object twice and a total below the threshold.
 
+`--mock` checks every operation of the same claim with pod2's mock prover,
+without proving it: a dry run that shows what a claim would count. Its pod
+can't be wrapped.
+
+A claim's cost grows faster than its item count, in pod2's planning of how
+to split the statements across pods: on 2026-11-09 a dry run of 100 items
+planned 31 pods in 6 s, and one of 300 items 92 pods in 52 s. A whole
+inventory of about 4,800 items would take hours to plan before proving
+about 1,500 pods (an extrapolation, not a measurement), so a claim should
+name the fewest, most valuable items that reach the threshold. The
+server's inventory on 2026-11-09 at 16:22 UTC held 6 Emeralds and 58
+Sapphires, 7,120,000 BIT in 64 items, of its 9,447,023 BIT.
+
+The app's rules, reimplemented in Python over the server's 5,036 live item
+files, gave exactly the dashboard's 9,447,022.73 BIT. A dry run of the
+claim at the finalized block 12098606, against the same files, counted 4,831
+items worth 9,356,867.23 BIT, the same values class by class, and skipped
+169 whose current state was created after that block: a MiningDrill
+upgraded to level 9 and a BucketOfStone filled since, among others. A claim
+counts the item states that exist at its root, so an inventory that keeps
+changing needs its files from that root's time, or a pause until the next
+posted root.
+
 On 2026-11-09 (M3 Pro, the Mac helper on medium) 19 real items of every
 kind, live at block 12098545, proved at a threshold of exactly their value,
 2,487,006 BIT, in 102 s and 4.1 GB: 397 statements in 7 pods. A Python

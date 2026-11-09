@@ -71,7 +71,7 @@ fn usage() -> ! {
   holdings prove --player NAME --sync URL [--block N] --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
   holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json
   holdings onchain-pod --sync URL [--block N] --out POD.json ITEM.dobj
-  holdings bounty-pod --sync URL [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json ITEM.dobj...
+  holdings bounty-pod --sync URL [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json [--mock] ITEM.dobj...
   holdings bounty-info --threshold BIT [--recipient 0xADDRESS] [--pexe BITCRAFT.pexe]"
     );
     std::process::exit(2)
@@ -141,6 +141,7 @@ fn main() -> Result<()> {
                 threshold,
                 Path::new(&flag("--out")),
                 &paths,
+                switches.contains("--mock"),
             )
         }
         "bounty-info" => {
@@ -188,7 +189,9 @@ fn read_object(path: &Path) -> Result<Dictionary> {
 /// Proves `BountyClaim(state_header, recipient, threshold)` for the items, as a
 /// pod's only public statement, against the state at `block` (the head when
 /// None) of a synchronizer with the holdings witness endpoint; writes the pod
-/// for pod2-onchain's `wrap`.
+/// for pod2-onchain's `wrap`. With `mock`, pod2's mock prover checks every
+/// operation of the same claim without proving it, in a fraction of the
+/// time: a dry run, whose pod can't be wrapped.
 fn bounty_pod(
     sync: &str,
     block: Option<i64>,
@@ -196,6 +199,7 @@ fn bounty_pod(
     threshold: i64,
     out: &Path,
     items: &[PathBuf],
+    mock: bool,
 ) -> Result<()> {
     let objects = items.iter().map(|p| read_object(p)).collect::<Result<Vec<_>>>()?;
     let witness = fetch_witness(sync, block, &objects)?;
@@ -216,14 +220,19 @@ fn bounty_pod(
         eprintln!("claim  {count:>5} {name:<15} {:>15} BIT", *centi as f64 / 100.0);
     }
     let params = Params::default();
-    let mut ctx = context(MultiPodBuilder::new(&params, &DEFAULT_VD_SET), bounty::bounty_module()?)?;
+    let (vd_set, prover): (VDSet, Box<dyn MainPodProver>) = if mock {
+        (VDSet::new(&[]), Box::new(MockProver {}))
+    } else {
+        (DEFAULT_VD_SET.clone(), Box::new(Prover {}))
+    };
+    let mut ctx = context(MultiPodBuilder::new(&params, &vd_set), bounty::bounty_module()?)?;
     let recipient_value = bounty::recipient_value(recipient)?;
     let (_, total) = bounty::prove_claim(&mut ctx, &header, &live, &recipient_value, threshold)?;
     let solution = ctx.builder.solve().map_err(|err| anyhow!(err))?;
     eprintln!("{}", solution.solution_breakdown());
     let started = Instant::now();
     let pod = solution
-        .prove(&Prover {})
+        .prove(prover.as_ref())
         .map_err(|err| anyhow!(err))?
         .output_pod()
         .clone();
@@ -231,13 +240,14 @@ fn bounty_pod(
     ensure!(pod.pod.pub_statements().len() == 1, "the pod has more than one public statement");
     fs::write(out, serde_json::to_string(&pod)?)?;
     eprintln!(
-        "claimed {} items worth {} BIT (threshold {} BIT; skipped {}) for {recipient} in {:.1} s, \
+        "claimed {} items worth {} BIT (threshold {} BIT; skipped {}) for {recipient} in {:.1} s{}, \
          against state root {} (block {}); pod in {}",
         live.len(),
         total as f64 / 100.0,
         threshold as f64 / 100.0,
         skipped.len(),
         started.elapsed().as_secs_f64(),
+        if mock { " (mock)" } else { "" },
         encode_hash_hex(&witness.state_root),
         witness.block_number,
         out.display()
