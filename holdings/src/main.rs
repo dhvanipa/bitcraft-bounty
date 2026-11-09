@@ -36,6 +36,7 @@ use pod2::{
     lang::{Module, load_module},
     middleware::{
         CustomPredicateRef, Hash, MainPodProver, NativeOperation, OperationAux, OperationType,
+        Predicate,
         Params, PodType, Statement, StrKey, VDSet, Value, ValueRef,
         containers::{Array, Dictionary},
         hash_values,
@@ -68,7 +69,8 @@ fn usage() -> ! {
         "usage:
   holdings classes --pexe BITCRAFT.pexe
   holdings prove --player NAME --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
-  holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json"
+  holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json
+  holdings onchain-pod --out POD.json ITEM.dobj"
     );
     std::process::exit(2)
 }
@@ -114,6 +116,10 @@ fn main() -> Result<()> {
             let sync = (!switches.contains("--offline"))
                 .then(|| flags.get("--sync").cloned().unwrap_or(DEFAULT_SYNC.into()));
             verify(Path::new(&flag("--pexe")), sync.as_deref(), &paths[0])
+        }
+        "onchain-pod" => {
+            ensure!(paths.len() == 1, "onchain-pod takes one item file");
+            onchain_pod(Path::new(&flag("--out")), &paths[0])
         }
         _ => usage(),
     }
@@ -430,6 +436,43 @@ fn prove(player: &str, out: &Path, items: &[PathBuf], mock: bool, chunk: usize) 
     Ok(())
 }
 
+/// One item's `Holds` as the only public statement of a MainPod, written as
+/// the MainPod's JSON. That is the input of pod2-onchain's `wrap`, which turns
+/// it into a proof a contract can check: a contract reads a pod's one public
+/// statement, so this pod names no player.
+fn onchain_pod(out: &Path, item: &Path) -> Result<()> {
+    let params = Params::default();
+    let mut ctx = BuildContext::new(
+        MultiPodBuilder::new(&params, &DEFAULT_VD_SET),
+        vec![holdings_module()?],
+    );
+    let (record, creation) = read_item(item)?;
+    prove_holds(&mut ctx, &record.obj, &creation)?;
+    let solution = ctx.builder.solve().map_err(|err| anyhow!(err))?;
+    let started = Instant::now();
+    let pod = solution
+        .prove(&Prover {})
+        .map_err(|err| anyhow!(err))?
+        .output_pod()
+        .clone();
+    pod.pod.verify().map_err(|err| anyhow!("own proof fails: {err}"))?;
+    ensure!(
+        pod.pod.pub_statements().len() == 1,
+        "the pod has {} public statements",
+        pod.pod.pub_statements().len()
+    );
+    fs::write(out, serde_json::to_string(&pod)?)?;
+    eprintln!(
+        "proved one {} in {:.1} s against state root {} (block {}); pod in {}",
+        record.metadata.class.name,
+        started.elapsed().as_secs_f64(),
+        encode_hash_hex(&creation.header.hash()),
+        creation.header.block_number,
+        out.display()
+    );
+    Ok(())
+}
+
 // ============================================================================
 // classes
 // ============================================================================
@@ -462,6 +505,9 @@ fn load_plugin(pexe_path: &Path) -> Result<Plugin> {
 fn classes(pexe_path: &Path) -> Result<()> {
     let plugin = load_plugin(pexe_path)?;
     println!("module {}", plugin.module_hash);
+    let module = holdings_module()?;
+    let holds = Predicate::Custom(holds_ref(&module)).hash();
+    println!("Holds predicate          {}", encode_hash_hex(&holds));
     let mut rows: Vec<_> = plugin.classes.iter().collect();
     rows.sort_by(|a, b| a.1.cmp(b.1));
     for (hash, name) in rows {

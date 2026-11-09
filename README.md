@@ -20,6 +20,7 @@ spent.
 | Folder | What |
 |---|---|
 | [holdings/](holdings/README.md) | the prover and verifier, `holdings prove` and `holdings verify`, with the pod2 predicate they use. A working prototype, measured and tested on real items on 2026-11-09 |
+| [onchain/](onchain/README.md) | checking a holdings claim in a contract: one Emerald's proof wrapped in Groth16 with pod2-onchain and verified by a Solidity contract for 547,738 gas, toward a bounty that pays whoever first proves they hold a given amount of BIT |
 
 Not built yet: the website that takes proofs, re-checks the claimed items for
 spends, counts each item once across players, and ranks players.

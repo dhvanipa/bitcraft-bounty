@@ -68,8 +68,11 @@ holdings prove --player NAME --out proof.json ~/.bitcraft/objects/bitcraft__emer
 holdings verify --pexe ~/.bitcraft/actions/bitcraft.pexe proof.json
 ```
 
-`holdings classes --pexe ...` prints the module hash and each class's type
-hash. `prove --chunk N` sets the items per pod (default 9).
+`holdings classes --pexe ...` prints the module hash, the `Holds` predicate's
+hash and each class's type hash. `prove --chunk N` sets the items per pod
+(default 9). `holdings onchain-pod --out pod.json ITEM.dobj` proves one item's
+`Holds` as a pod's only public statement, for a contract to check (see
+[../onchain/](../onchain/README.md)).
 
 Item files are in `~/.bitcraft/objects/` for the Bitcraft app and in
 `~/.dobj/objects/` for the `dobj` CLI. Proving only reads them: it runs no
