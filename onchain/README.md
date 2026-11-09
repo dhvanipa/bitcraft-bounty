@@ -13,10 +13,10 @@ generates a Solidity verifier for it.
 
 ## The pipeline
 
-1. `holdings onchain-pod --out pod.json ITEM.dobj` proves one item's
-   `Holds(state_root, type, nullifier, tag)` as the pod's only public
-   statement. A contract reads the pod's one statement, so this pod names no
-   player.
+1. `holdings onchain-pod --sync URL --out pod.json ITEM.dobj` proves one
+   item's `Holds(state_root, type, tag)`, live at the synchronizer's state, as
+   the pod's only public statement. A contract reads the pod's one statement,
+   so this pod names no player.
 2. `wrap pod.json plonky2-proof/` (pod2-onchain at `d3ab486`, branch
    `fixed-verifier-data`) wraps it. The wrapper circuit verifies the MainPod
    proof against the MainPod circuit (a constant), fixes the verifier-data set
@@ -27,12 +27,14 @@ generates a Solidity verifier for it.
    circuit) compiles the Groth16 circuit, runs the setup and writes
    `Verifier.sol`. The wrapper circuit is the same for every pod with one
    public statement, since the predicate's hash is a public input, so this
-   one setup serves `Holds` and `BountyClaim` alike. `go run cli/main.go -p -i plonky2-proof -o groth` proves,
-   and writes `solidity_calldata.json`: the verifier's arguments.
+   one setup serves `Holds` and `BountyClaim` alike.
+   `go run cli/main.go -p -i plonky2-proof -o groth` proves, and writes
+   `solidity_calldata.json`: the verifier's arguments.
 4. [src/HoldsCheck.sol](src/HoldsCheck.sol) takes those arguments. It checks
    that the claim is a `Holds` claim, that its state root is one the owner
-   posted, and that the Groth16 proof verifies, and returns the item's class,
-   nullifier and tag.
+   posted, that the unused arguments are zero, and that the Groth16 proof
+   verifies, and returns the item's class and tag. The item was created and
+   is unspent at that root; its nullifier stays private.
 
 A value packs into the 32 bytes the synchronizer and `holdings` print, limb 3
 first, so the owner posts the synchronizer's `state_root` as a `bytes32`
@@ -42,23 +44,27 @@ unchanged.
 
 | Step | Time | Peak memory | Output |
 |---|---:|---:|---|
-| `holdings onchain-pod`, one Emerald | 14.2 s | 3.4 GB | 222 kB pod |
-| `wrap` (wrapper circuit 2^13 rows) | 11.7 s, of which 7.7 s proving | 1.6 GB | 617 kB proof JSON |
+| `holdings onchain-pod`, one Emerald | 7.9 s | 3.4 GB | 223 kB pod |
+| `holdings bounty-pod`, three Emeralds | 7.6 s | 3.4 GB | 232 kB pod |
+| `wrap` (wrapper circuit 2^13 rows) | 14.3 to 14.5 s; 11.7 s on a quieter Mac, of which 7.7 s proving | 1.6 GB | 617 kB proof JSON |
 | Groth16 circuit compile | 26 s | | 5,566,502 constraints, 24 public inputs, 322 MB R1CS |
 | Groth16 setup (once per circuit) | 552 s | 13.7 GB | 1.36 GB proving key, 1.3 kB verifying key, 45 kB `Verifier.sol` |
-| Groth16 proof | 16.7 s, after 107 s to load the proving key | 9.8 GB | 256-byte proof |
+| Groth16 proof | 16.5 to 16.7 s, after 105 to 122 s to load the proving key | 9.8 GB | 256-byte proof |
 | gnark's own verification | 1.5 ms | | |
 
-The Groth16 rows are from the fixed circuit (below), measured on an idle
-machine. The first measurements, made while other proofs ran, were about 17
-minutes for the setup and 36.6 s plus 236 s for the proof.
+The Groth16 rows are from the fixed circuit (below). The setup was measured
+on an idle machine; the `holdings` rows and the later proofs with the Mac
+helper's GPU search on its medium setting (load average about 15). The first
+measurements, made while other proofs ran, were about 17 minutes for the
+setup and 36.6 s plus 236 s for the proof.
 
 On-chain (Foundry, `forge test -vv`):
 
 | Call | Gas |
 |---|---:|
 | `Verifier.verifyProof` | 543,110 |
-| `HoldsCheck.check` (input checks, root lookup, verify) | 547,738 |
+| `HoldsCheck.check` (input checks, root lookup, verify) | 548,057 |
+| `BountyEscrow.claim`, real proof, paying a mock token | 597,295 |
 
 The 24 public inputs cost about a quarter of that: each is a scalar
 multiplication in the verifier. A bounty statement with fewer or packed
@@ -70,8 +76,9 @@ read the key without re-checking its points, which should be much faster;
 not tried.
 
 The tests check that `check` returns the Emerald's class, and refuses a root
-the owner did not post, a changed claim (one limb of the type hash), an input
-at or above the Goldilocks modulus, and a root posted by anyone but the owner.
+the owner did not post, a changed claim (one limb of the type hash), a
+non-zero unused argument, an input at or above the Goldilocks modulus, and a
+root posted by anyone but the owner.
 
 ## The verifier was forgeable until 2026-11-09
 
@@ -105,7 +112,8 @@ verifier:
 - every input is below the Goldilocks modulus, so each claim has one
   encoding;
 - input 0..3 is the `BountyClaim` predicate's hash (fixed at deployment; it
-  commits to the gem table, so a claim with other values doesn't match);
+  commits to the gem table and to holdings.podlang, which it imports, so a
+  claim with other values or another `LiveObject` doesn't match);
 - input 4..7 is a state root the poster posted;
 - input 12..15 is the threshold, as a pod2 integer (fixed at deployment);
 - input 16..23 (the unused arguments) is zero;
@@ -125,6 +133,14 @@ a key on the synchronizer's box
 ([../synchronizer/](../synchronizer/README.md)), which posts the root at
 Sepolia's finalized block each hour.
 
+`test/BountyEscrowProof.t.sol` runs a real claim through the real verifier:
+three Emeralds (2,400,000 BIT) live at Sepolia block 12098387, proved on
+2026-11-09 against our synchronizer. Its 5 tests check that the 24 inputs are
+the claim (predicate, root, recipient, threshold, zero unused arguments),
+that the claim pays the recipient whoever sends it, that it needs its root
+posted, that a 50,000,000 BIT bounty refuses it, and that changing the
+recipient fails the proof.
+
 The tests (`test/BountyEscrow.t.sol`, 17, with a mock verifier and token)
 cover a paid claim; the recipient named by the proof, not the sender, being
 paid; one claim only; an invalid proof; a root not posted; another predicate;
@@ -140,8 +156,10 @@ deadline, and not after a claim.
 cd onchain && forge test -vv
 ```
 
-`test/fixtures/emerald_calldata.json` is a real Emerald's proof, and
-`src/Verifier.sol` the verifier from the setup it was proved with.
+`test/fixtures/emerald_calldata.json` is a real Emerald's `Holds` proof and
+`test/fixtures/bounty_calldata.json` a real three-Emerald `BountyClaim`, both
+live at block 12098387, and `src/Verifier.sol` the verifier from the setup
+they were proved with. 29 tests pass on 2026-11-09.
 
 ## Deploy on Sepolia
 
@@ -152,7 +170,7 @@ a Foundry keystore account (`cast wallet import`), and `SEPOLIA` an RPC URL.
 
 ```bash
 USDC=0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238   # Circle's USDC on Sepolia, 6 decimals (read on-chain 2026-11-09)
-PREDICATE=0xedb50b5197cf5b7b647a34e27ff456c056620794a465191de635a9695f315f7f
+PREDICATE=0x6bbcaa6ace146dae1051817bfe08dd8e0b609ae53bce8aa25638aabff56bb735
 THRESHOLD=0xffffffff00000000000000000000000000000000000000000000000002faf080   # 50,000,000 BIT
 DEADLINE=$(date -d '+30 days' +%s)   # macOS: date -v+30d +%s
 forge create src/Verifier.sol:Verifier --rpc-url $SEPOLIA --account OWNER --broadcast

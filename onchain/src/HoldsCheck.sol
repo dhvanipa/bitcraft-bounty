@@ -12,9 +12,11 @@ interface IGroth16Verifier {
     ) external view;
 }
 
-/// Checks a wrapped `Holds(state_root, type, nullifier, tag)` claim
-/// (bitcraft-leaderboard's holdings.podlang) against the game state roots its
-/// owner posts.
+/// Checks a wrapped `Holds(state_root, type, tag)` claim (bitcraft-leaderboard's
+/// holdings.podlang) against the game state roots its owner posts: the
+/// prover holds an item of class `type`, created and unspent at that root.
+/// The item's nullifier stays private; `tag` is the same for every state of
+/// one object, so a caller can count each object once.
 ///
 /// The wrapper's 24 public inputs are Goldilocks field elements: the
 /// statement's predicate hash, then each argument's value, 4 limbs each. A
@@ -48,20 +50,23 @@ contract HoldsCheck {
     }
 
     /// Verifies a wrapped `Holds` proof and returns its claim: the item's
-    /// class (its `Is<Class>` predicate hash), its nullifier and its tag.
+    /// class (its `Is<Class>` predicate hash) and its tag.
     function check(
         uint256[8] calldata proof,
         uint256[2] calldata commitments,
         uint256[2] calldata commitmentPok,
         uint256[24] calldata input
-    ) external view returns (bytes32 class, bytes32 nullifier, bytes32 tag) {
+    ) external view returns (bytes32 class, bytes32 tag) {
         for (uint256 i = 0; i < 24; i++) {
             require(input[i] < GOLDILOCKS, "input is not a Goldilocks element");
         }
         require(pack(input, 0) == holdsPredicate, "not a Holds claim");
         require(isRoot[pack(input, 4)], "state root not posted");
+        for (uint256 i = 16; i < 24; i++) {
+            require(input[i] == 0, "unexpected argument");
+        }
         verifier.verifyProof(proof, commitments, commitmentPok, input);
-        return (pack(input, 8), pack(input, 12), pack(input, 16));
+        return (pack(input, 8), pack(input, 12));
     }
 
     function pack(uint256[24] calldata input, uint256 at) internal pure returns (bytes32) {
