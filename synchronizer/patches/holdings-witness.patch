@@ -1,0 +1,257 @@
+diff --git a/services/synchronizer/README.md b/services/synchronizer/README.md
+index 8ab5611..1de68f1 100644
+--- a/services/synchronizer/README.md
++++ b/services/synchronizer/README.md
+@@ -217,6 +217,21 @@ Reorg rollback does not modify RocksDB. The surviving Postgres `DonState` determ
+     - `nullifiersRoot`
+     - `priorStateHistoryRoot`
+     - `createdProofs` (array of `{ commitment, present, index, proof }`)
++- `POST /v1/holdings/witness`
++  - proofs that object states were created and are unspent at one state, for a holder to
++    prove what they hold against a given state root
++  - request body:
++    - `blockNumber` (optional: the execution block of the state to answer against, as
++      `/v1/state/by_el` takes it; the head state when absent)
++    - `objectCommitments` (array of hash strings)
++    - `nullifiers` (array of hash strings); at most 256 items across both arrays
++  - returns that state's `stateRoot`, `blockNumber`, `blockTimestamp`, `blockHash`,
++    `createdRoot`, `nullifiersRoot` and `priorStateHistoryRoot`, and:
++    - `createdProofs` (array of `{ commitment, present, index, proof }`, as the grounding
++      witness, against that state's created array)
++    - `nullifierProofs` (array of `{ nullifier, spent, proof }`: a Merkle proof against
++      that state's nullifiers root, of presence when `spent`, of absence otherwise)
++  - `404` when no committed slot holds `blockNumber`
+ - `GET /v1/tx/by_hash/{tx_hash}`
+   - `tx_hash` is a 32-byte Ethereum transaction hash in hex (`0x` prefix optional)
+   - returns `blobs`: one entry per blob of that transaction, in blob order, each with:
+diff --git a/services/synchronizer/src/api.rs b/services/synchronizer/src/api.rs
+index 24d369a..5ca6d59 100644
+--- a/services/synchronizer/src/api.rs
++++ b/services/synchronizer/src/api.rs
+@@ -11,7 +11,7 @@ use axum::{
+     routing::{get, post},
+     Json, Router,
+ };
+-use pod2::middleware::Hash;
++use pod2::{backends::plonky2::primitives::merkletree::MerkleProof, middleware::Hash};
+ use serde::{Deserialize, Serialize};
+ use tokio::sync::watch;
+ use tracing::info;
+@@ -69,6 +69,7 @@ pub async fn run_api_server(
+             post(post_state_nullifier_contains),
+         )
+         .route("/v1/txlib/grounding-witness", post(post_grounding_witness))
++        .route("/v1/holdings/witness", post(post_holdings_witness))
+         .route("/v1/tx/by_hash/{tx_hash}", get(get_tx_status_by_tx_hash))
+         .route("/v1/tx/by_final/{tx_final}", get(get_tx_status_by_tx_final))
+         .layer(tower_http::cors::CorsLayer::permissive())
+@@ -267,6 +268,140 @@ async fn post_grounding_witness(
+     }))
+ }
+ 
++/// Request for `POST /v1/holdings/witness`.
++#[derive(Debug, Deserialize)]
++#[serde(rename_all = "camelCase")]
++struct HoldingsWitnessRequest {
++    /// Execution block of the state to answer against, as `/v1/state/by_el`
++    /// takes it; the head state when absent.
++    #[serde(default)]
++    block_number: Option<i64>,
++    #[serde(default)]
++    object_commitments: Vec<Hash>,
++    #[serde(default)]
++    nullifiers: Vec<Hash>,
++}
++
++#[derive(Debug, Serialize)]
++#[serde(rename_all = "camelCase")]
++struct NullifierProofResponse {
++    nullifier: Hash,
++    /// Whether the nullifier is in the spent set, so its object state is spent.
++    spent: bool,
++    /// Merkle proof against the nullifiers root: of presence when `spent`, of
++    /// absence otherwise.
++    proof: MerkleProof,
++}
++
++/// Everything a holder needs to prove, against one state root, that object
++/// states were created and are unspent there: the state's header, an
++/// `ArrayContains` proof per commitment and a spent-set proof per nullifier.
++#[derive(Debug, Serialize)]
++#[serde(rename_all = "camelCase")]
++struct HoldingsWitnessResponse {
++    state_root: Hash,
++    block_number: i64,
++    block_timestamp: i64,
++    block_hash: Hash,
++    created_root: Hash,
++    nullifiers_root: Hash,
++    prior_state_history_root: Hash,
++    created_proofs: Vec<ObjectProofResponse>,
++    nullifier_proofs: Vec<NullifierProofResponse>,
++}
++
++/// Proofs about object states against one state: the head, or the state
++/// derived at `blockNumber`, such as a root a contract was given. The
++/// grounding witness only answers against the head, and has no proof that a
++/// nullifier is absent.
++async fn post_holdings_witness(
++    State(app_state): State<AppState>,
++    Json(body): Json<HoldingsWitnessRequest>,
++) -> Result<Json<HoldingsWitnessResponse>, (StatusCode, String)> {
++    ensure_membership_query_limit(body.object_commitments.len(), body.nullifiers.len())?;
++    let (slot_state, indices) = match body.block_number {
++        None => {
++            let (head, indices) = app_state
++                .state_log
++                .slot_state_at_head_with_created_indices(&body.object_commitments)
++                .await
++                .map_err(internal_error)?;
++            (head.ok_or_else(not_initialized)?, indices)
++        }
++        Some(number) => {
++            let block = u64::try_from(number).map_err(|_| {
++                (
++                    StatusCode::BAD_REQUEST,
++                    format!("execution block number {number} is negative"),
++                )
++            })?;
++            let slot_state = app_state
++                .state_log
++                .slot_state_at_el_block(BlockHashOrNumber::Number(block))
++                .await
++                .map_err(internal_error)?
++                .ok_or_else(|| {
++                    (
++                        StatusCode::NOT_FOUND,
++                        format!("no state derived at execution block {number}"),
++                    )
++                })?;
++            // The index is a hint here too: prove_created_for checks the leaf
++            // at this state's own root, so a commitment created later is
++            // reported absent.
++            let indices = app_state
++                .state_log
++                .created_indices(&body.object_commitments)
++                .await
++                .map_err(internal_error)?;
++            (slot_state, indices)
++        }
++    };
++    let state = slot_state.state;
++    let containers = &app_state.containers;
++    let created = containers
++        .prove_created_for(&state.roots, &body.object_commitments, &indices)
++        .map_err(internal_error)?;
++    let nullified = containers
++        .prove_nullifiers_for(&state.roots, &body.nullifiers)
++        .map_err(internal_error)?;
++    let header = state.state_header();
++
++    Ok(Json(HoldingsWitnessResponse {
++        state_root: state.metadata.state_root,
++        block_number: header.block_number,
++        block_timestamp: header.block_timestamp,
++        block_hash: header.block_hash,
++        created_root: header.created_root,
++        nullifiers_root: header.nullifiers_root,
++        prior_state_history_root: header.prior_state_history_root,
++        created_proofs: body
++            .object_commitments
++            .into_iter()
++            .zip(created)
++            .map(|(commitment, witness)| {
++                let (index, proof) = witness.unzip();
++                ObjectProofResponse {
++                    commitment,
++                    present: index.is_some(),
++                    index,
++                    proof,
++                }
++            })
++            .collect(),
++        nullifier_proofs: body
++            .nullifiers
++            .into_iter()
++            .zip(nullified)
++            .map(|(nullifier, (spent, proof))| NullifierProofResponse {
++                nullifier,
++                spent,
++                proof,
++            })
++            .collect(),
++    }))
++}
++
+ /// `tx_hash` is a 32-byte Ethereum transaction hash in hex, `0x` prefix optional.
+ async fn get_tx_status_by_tx_hash(
+     State(app_state): State<AppState>,
+diff --git a/services/synchronizer/src/container_db.rs b/services/synchronizer/src/container_db.rs
+index 8df0e2c..86df1fa 100644
+--- a/services/synchronizer/src/container_db.rs
++++ b/services/synchronizer/src/container_db.rs
+@@ -132,6 +132,34 @@ impl ContainerDb {
+             .collect()
+     }
+ 
++    /// A proof for each nullifier against the spent set at `roots.nullifiers`:
++    /// `(true, proof of presence)` when it is spent, `(false, proof of
++    /// absence)` otherwise. A proof of absence is what lets a holder prove an
++    /// object state is unspent at this root. The set is opened once for the
++    /// whole batch.
++    pub fn prove_nullifiers_for(
++        &self,
++        roots: &StateRoots,
++        nullifiers: &[Hash],
++    ) -> Result<Vec<(bool, MerkleProof)>> {
++        let nullifier_set = self.open_nullifiers(roots.nullifiers)?;
++        nullifiers
++            .iter()
++            .map(|hash| {
++                let value = Value::from(*hash);
++                if nullifier_set.contains(&value).map_err(|err| anyhow!("{err}"))? {
++                    let proof = nullifier_set.prove(&value).map_err(|err| anyhow!("{err}"))?;
++                    Ok((true, proof))
++                } else {
++                    let proof = nullifier_set
++                        .prove_nonexistence(&value)
++                        .map_err(|err| anyhow!("{err}"))?;
++                    Ok((false, proof))
++                }
++            })
++            .collect()
++    }
++
+     pub fn nullifier_exists_batch(
+         &self,
+         roots: &StateRoots,
+@@ -381,4 +409,29 @@ mod tests {
+             vec![false]
+         );
+     }
++
++    #[test]
++    fn test_nullifier_proofs_of_presence_and_absence() {
++        let (containers, _dir) = open_test_db();
++        let mut nullifiers = containers.open_nullifiers(EMPTY_HASH).unwrap();
++        let spent = test_hash(3);
++        nullifiers.insert(&Value::from(spent)).unwrap();
++        nullifiers.insert(&Value::from(test_hash(4))).unwrap();
++        let root = nullifiers.commitment();
++        let roots = StateRoots {
++            nullifiers: root,
++            ..StateRoots::empty()
++        };
++
++        let unspent = test_hash(5);
++        let proofs = containers
++            .prove_nullifiers_for(&roots, &[spent, unspent])
++            .unwrap();
++        assert!(proofs[0].0, "a spent nullifier is reported spent");
++        Set::verify(root, &proofs[0].1, &Value::from(spent)).unwrap();
++        assert!(!proofs[1].0, "an unspent nullifier is reported unspent");
++        Set::verify_nonexistence(root, &proofs[1].1, &Value::from(unspent)).unwrap();
++        // the proof of absence does not prove the spent one absent
++        assert!(Set::verify_nonexistence(root, &proofs[1].1, &Value::from(spent)).is_err());
++    }
+ }
