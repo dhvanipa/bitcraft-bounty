@@ -16,9 +16,9 @@ interface Vm {
     function prank(address sender) external;
 }
 
-/// A real Emerald's `Holds` claim, proved by `holdings onchain-pod`, wrapped by
-/// pod2-onchain's `wrap` and proved in Groth16 by its Go prover
-/// (test/fixtures/emerald_calldata.json).
+/// A real Emerald's `Holds` claim, live at a state root, proved by
+/// `holdings onchain-pod`, wrapped by pod2-onchain's `wrap` and proved in
+/// Groth16 by its Go prover (test/fixtures/emerald_calldata.json).
 contract HoldsCheckTest {
     Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
@@ -26,11 +26,11 @@ contract HoldsCheckTest {
     event log_named_bytes32(string key, bytes32 val);
 
     /// `holdings classes` prints these.
-    bytes32 internal constant HOLDS = 0x374b70ce2c1ee0a79be6b06d76593599befd53170b430ca2637e7bfe1942df40;
+    bytes32 internal constant HOLDS = 0x6bff18f58d0a713a3b55b5de4701275df921b1b1ef8200c901a63dbffd1833c4;
     bytes32 internal constant EMERALD = 0x87c2c758e8d81ccb603ed25ad7b4c6d4cdea3e4ff014e9765240d9ec945fe227;
-    /// The state root of the Emerald's creation proof (block 12078843), as
-    /// the synchronizer reports it.
-    bytes32 internal constant ROOT = 0x93c55b3783ad59842f0c9e6377bc1f417250dd1211c98111acbd0e7d530a5ddf;
+    /// The synchronizer's state root at Sepolia block 12098387, where the
+    /// Emerald was proved live.
+    bytes32 internal constant ROOT = 0xc5ea51eea2da9d82509d80c172bd3f50d32cdf3df0dcfe1b34970d07c075b267;
 
     Verifier internal verifier;
     HoldsCheck internal holds;
@@ -64,10 +64,9 @@ contract HoldsCheckTest {
     function test_check_reads_an_emerald() public {
         holds.postRoot(ROOT);
         uint256 before = gasleft();
-        (bytes32 class, bytes32 nullifier, bytes32 tag) = holds.check(proof, commitments, pok, input);
+        (bytes32 class, bytes32 tag) = holds.check(proof, commitments, pok, input);
         emit log_named_uint("check gas", before - gasleft());
         require(class == EMERALD, "not an Emerald");
-        emit log_named_bytes32("nullifier", nullifier);
         emit log_named_bytes32("tag", tag);
     }
 
@@ -81,6 +80,13 @@ contract HoldsCheckTest {
         // claim a different class: one limb of the type hash
         input[8] = input[8] ^ 1;
         vm.expectRevert();
+        holds.check(proof, commitments, pok, input);
+    }
+
+    function test_rejects_an_extra_argument() public {
+        holds.postRoot(ROOT);
+        input[16] = 1;
+        vm.expectRevert(bytes("unexpected argument"));
         holds.check(proof, commitments, pok, input);
     }
 

@@ -20,7 +20,8 @@ spent.
 | Folder | What |
 |---|---|
 | [holdings/](holdings/README.md) | the prover and verifier, `holdings prove` and `holdings verify`, with the pod2 predicate they use. A working prototype, measured and tested on real items on 2026-11-09 |
-| [onchain/](onchain/README.md) | checking a holdings claim in a contract: one Emerald's proof wrapped in Groth16 with pod2-onchain and verified by a Solidity contract for 547,738 gas, toward a bounty that pays whoever first proves they hold a given amount of BIT |
+| [onchain/](onchain/README.md) | holdings claims in a contract: proofs wrapped in Groth16 with pod2-onchain and verified in Solidity for about 545,000 gas, and `BountyEscrow`, which pays its balance to whoever first proves they hold unspent gems worth a threshold of BIT at a posted state root |
+| [synchronizer/](synchronizer/README.md) | our own run of the game's synchronizer and archiver, patched to prove a nullifier absent at a past root, and the hourly poster of finalized state roots to the bounty |
 
 Not built yet: the website that takes proofs, re-checks the claimed items for
 spends, counts each item once across players, and ranks players.
