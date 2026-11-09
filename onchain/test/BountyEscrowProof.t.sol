@@ -19,23 +19,27 @@ interface Vm {
     function warp(uint256 timestamp) external;
 }
 
-/// A real bounty claim: three Emeralds (2,400,000 BIT) unspent at state root
-/// ROOT, for RECIPIENT, proved by `holdings bounty-pod`, wrapped by
-/// pod2-onchain's `wrap` and proved in Groth16 by its Go prover
+/// A real bounty claim: 19 items of every kind the Bitcraft app values (3
+/// Emeralds, 2 Sapphires, 2 Amethysts, 2 Quartz, Wood, 4 buckets with their
+/// contents, 2 MiningDrills by level, 3 IronAxes by durability), worth
+/// 2,487,006 BIT by the app's rules, unspent at state root ROOT, for
+/// RECIPIENT, proved by `holdings bounty-pod` with that exact threshold,
+/// wrapped by pod2-onchain's `wrap` and proved in Groth16 by its Go prover
 /// (test/fixtures/bounty_calldata.json), checked by the real verifier.
 contract BountyEscrowProofTest {
     Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
     event log_named_uint(string key, uint256 val);
 
-    /// `holdings bounty-info --threshold 2400000` prints these.
-    bytes32 internal constant PREDICATE = 0x6bbcaa6ace146dae1051817bfe08dd8e0b609ae53bce8aa25638aabff56bb735;
-    bytes32 internal constant THRESHOLD = 0xffffffff00000000000000000000000000000000000000000000000000249f00;
-    bytes32 internal constant THRESHOLD_50M = 0xffffffff00000000000000000000000000000000000000000000000002faf080;
-    /// The synchronizer's state root at Sepolia block 12098387, where the claim
+    /// `holdings bounty-info --threshold 2487006` prints these: thresholds are
+    /// in centi-BIT.
+    bytes32 internal constant PREDICATE = 0xaae74e677f89c82dc523ce1850a26d075d457f85bedbdf35005f3918526a772a;
+    bytes32 internal constant THRESHOLD = 0xffffffff0000000000000000000000000000000000000000000000000ed2deb8;
+    bytes32 internal constant THRESHOLD_50M = 0xffffffff0000000000000000000000000000000000000001000000002a05f200;
+    /// The synchronizer's state root at Sepolia block 12098545, where the claim
     /// was proved.
-    bytes32 internal constant ROOT = 0xc5ea51eea2da9d82509d80c172bd3f50d32cdf3df0dcfe1b34970d07c075b267;
-    uint64 internal constant ROOT_BLOCK = 12_098_387;
+    bytes32 internal constant ROOT = 0x5c6b1fe2caf14ed7746c657c67a3844d99bbbd94472faf445ffeb0521874f706;
+    uint64 internal constant ROOT_BLOCK = 12_098_545;
     address internal constant RECIPIENT = 0xa1B2c3d4E5f60718293a4B5C6d7E8F9012345678;
     address internal constant POSTER = address(0x9057);
     uint256 internal constant DEADLINE = 1_800_000_000;
@@ -62,7 +66,7 @@ contract BountyEscrowProofTest {
 
         verifier = new Verifier();
         token = new MockToken();
-        vm.warp(DEADLINE - 1 days);
+        vm.warp(DEADLINE - 30 days);
     }
 
     function escrow(bytes32 threshold) internal returns (BountyEscrow e) {
@@ -103,7 +107,14 @@ contract BountyEscrowProofTest {
         e.claim(proof, commitments, pok, input);
     }
 
-    function test_a_50m_bounty_refuses_a_2_4m_claim() public {
+    function test_a_real_claim_fails_once_its_root_is_24_hours_old() public {
+        BountyEscrow e = escrow(THRESHOLD);
+        vm.warp(block.timestamp + 24 hours + 1);
+        vm.expectRevert(bytes("state root older than 24 hours"));
+        e.claim(proof, commitments, pok, input);
+    }
+
+    function test_a_50m_bounty_refuses_a_2_5m_claim() public {
         BountyEscrow e = escrow(THRESHOLD_50M);
         vm.expectRevert(bytes("wrong threshold"));
         e.claim(proof, commitments, pok, input);

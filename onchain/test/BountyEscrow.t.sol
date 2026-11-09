@@ -70,7 +70,7 @@ contract BountyEscrowTest {
         token = new MockToken();
         escrow = new BountyEscrow(IGroth16Verifier(address(verifier)), token, PREDICATE, THRESHOLD, DEADLINE, POSTER);
         token.mint(address(escrow), PRIZE);
-        vm.warp(DEADLINE - 1 days);
+        vm.warp(DEADLINE - 30 days);
 
         unpack(PREDICATE, 0);
         unpack(ROOT, 4);
@@ -120,6 +120,22 @@ contract BountyEscrowTest {
         escrow.postRoot(ROOT, 1);
         verifier.setReject(true);
         vm.expectRevert(bytes("invalid proof"));
+        claim();
+    }
+
+    function test_accepts_a_root_up_to_24_hours_old() public {
+        vm.prank(POSTER);
+        escrow.postRoot(ROOT, 1);
+        vm.warp(block.timestamp + 24 hours);
+        claim();
+        require(token.balanceOf(RECIPIENT) == PRIZE, "recipient not paid");
+    }
+
+    function test_rejects_a_root_older_than_24_hours() public {
+        vm.prank(POSTER);
+        escrow.postRoot(ROOT, 1);
+        vm.warp(block.timestamp + 24 hours + 1);
+        vm.expectRevert(bytes("state root older than 24 hours"));
         claim();
     }
 

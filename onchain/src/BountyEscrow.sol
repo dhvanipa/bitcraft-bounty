@@ -9,8 +9,8 @@ interface IERC20 {
 }
 
 /// Pays its whole token balance to the first proof that someone holds unspent
-/// Bitcraft gems worth at least a threshold of BIT, at a game state root its
-/// owner posted.
+/// Bitcraft items worth at least a threshold, counted as the Bitcraft app counts
+/// them, at a game state root its poster posted in the last 24 hours.
 ///
 /// A claim is a wrapped `BountyClaim(state_root, recipient, threshold)`
 /// (bitcraft-leaderboard's bounty.podlang): pod2-onchain's wrapper exposes the
@@ -20,12 +20,17 @@ interface IERC20 {
 contract BountyEscrow {
     uint256 internal constant GOLDILOCKS = 0xFFFFFFFF00000001;
     uint256 internal constant LIMB_40 = 1 << 40;
+    /// How long after it is posted a root can back a claim. Older roots stop
+    /// counting, so a claim shows items held within the last day, not at
+    /// any time since deployment.
+    uint256 public constant ROOT_LIFETIME = 24 hours;
 
     IGroth16Verifier public immutable verifier;
     IERC20 public immutable token;
     /// Hash of the `BountyClaim` predicate, packed (`holdings bounty-info`).
     bytes32 public immutable claimPredicate;
-    /// The threshold as a pod2 value, packed (`holdings bounty-info`).
+    /// The threshold in centi-BIT (1/100 BIT) as a pod2 value, packed
+    /// (`holdings bounty-info`).
     bytes32 public immutable threshold;
     /// After this time no claim is taken, and the owner can take the tokens back.
     uint256 public immutable deadline;
@@ -40,6 +45,8 @@ contract BountyEscrow {
     /// The execution block of each posted state root; 0 for a root not posted.
     /// A prover asks the synchronizer for its witness at this block.
     mapping(bytes32 => uint64) public rootBlock;
+    /// When each state root was posted.
+    mapping(bytes32 => uint64) public rootPostedAt;
     /// Who was paid, once someone was.
     address public winner;
 
@@ -76,6 +83,7 @@ contract BountyEscrow {
         require(msg.sender == poster, "only the poster posts roots");
         require(blockNumber != 0, "no block number");
         rootBlock[root] = blockNumber;
+        rootPostedAt[root] = uint64(block.timestamp);
         emit RootPosted(root, blockNumber);
     }
 
@@ -92,7 +100,9 @@ contract BountyEscrow {
         }
         require(pack(input, 0) == claimPredicate, "not a bounty claim");
         bytes32 root = pack(input, 4);
-        require(rootBlock[root] != 0, "state root not posted");
+        uint256 postedAt = rootPostedAt[root];
+        require(postedAt != 0, "state root not posted");
+        require(block.timestamp <= postedAt + ROOT_LIFETIME, "state root older than 24 hours");
         require(pack(input, 12) == threshold, "wrong threshold");
         for (uint256 i = 16; i < 24; i++) {
             require(input[i] == 0, "unexpected argument");
