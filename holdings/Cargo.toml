@@ -1,0 +1,22 @@
+# Copied into the game's workspace as devtools/holdings by holdings/build.sh;
+# not built from here.
+[package]
+name = "holdings"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+base64 = "0.22"
+payload = { path = "../../libs/payload" }
+pexe = { path = "../../libs/pexe" }
+pod2 = { workspace = true }
+pod2utils = { path = "../../libs/pod2utils" }
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+sdk = { path = "../../libs/sdk" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+txlib = { path = "../../libs/txlib" }
+wire-types = { workspace = true, features = ["chain"] }
