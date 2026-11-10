@@ -152,6 +152,9 @@ function el(tag, attrs = {}, ...children) {
 const link = (href, text) => el("a", { href, rel: "noopener" }, text);
 const address = (a) => link(`${config.explorer}/address/${a}`, el("code", {}, a));
 const hash = (h) => el("code", { class: "hash", title: h }, h);
+const muted = (text) => el("span", { class: "muted" }, text);
+/** Wei as ETH, to 4 decimals. */
+const eth = (wei) => chain.formatUnits((wei / 10n ** 14n) * 10n ** 14n, 18);
 const prizeText = (s) => `${chain.formatUnits(s.prize, s.decimals)} ${s.symbol}`;
 const thresholdBit = (s) => chain.intOf(s?.threshold ?? config.planned.threshold);
 
@@ -278,16 +281,20 @@ function renderTerms(s) {
     row("Threshold", `${chain.formatBit(centi)} BIT, at the app's values`);
     row("Claim predicate", hash(config.planned.claimPredicate), el("span", { class: "muted" }, "BountyClaim, as holdings bounty-info prints it"));
   } else {
-    row("Contract", address(BOUNTY));
+    row("Contract", address(BOUNTY), muted("BountyEscrow: holds the prize and pays it to the first valid claim"));
     const prize = s.claimed ? `${chain.formatUnits(chain.toUint(s.claimed.data), s.decimals)} ${s.symbol}, paid`
       : s.prize > 0n ? prizeText(s) : `nothing yet (${s.symbol})`;
     row("Prize", prize, el("span", { class: "muted" }, "the whole balance, paid once"), address(s.token));
     row("Threshold", `${centi === null ? s.threshold : chain.formatBit(centi)} BIT`, el("span", { class: "muted" }, "at the Bitcraft app's values: machines by level, buckets by contents, axes by durability"));
     row("Deadline", when(s.deadline), el("span", { class: "muted" }, "after it the owner can take the prize back"));
     row("Claim predicate", hash(s.predicate), el("span", { class: "muted" }, "BountyClaim; its hash fixes every class's value"));
-    row("Verifier", address(s.verifier));
-    row("Root poster", address(s.poster), el("span", { class: "muted" }, `${chain.formatUnits(s.posterBalance, 18).slice(0, 8)} ETH for gas`));
-    row("Owner", address(s.owner));
+    row("Verifier", address(s.verifier),
+      muted("the Groth16 verifier the contract calls to check a claim's proof; generated from the published setup"));
+    row("Root poster", address(s.poster),
+      muted("posts the game's state root every hour from our synchronizer. The contract trusts it: a made-up root could hold made-up items"),
+      el("span", {}, `${eth(s.posterBalance)} ETH left to pay for posting`));
+    row("Owner", address(s.owner),
+      muted("deployed and funded the bounty; can replace the root poster, and take the prize back only after the deadline, if no one claimed it"));
     if (s.winner !== chain.ZERO_ADDRESS) {
       row("Winner", address(s.winner), s.claimed ? link(`${config.explorer}/tx/${s.claimed.transactionHash}`, "the claim") : null);
     }
