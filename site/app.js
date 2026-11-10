@@ -88,11 +88,13 @@ async function readBounty() {
   const seen = new Set();
   const posted = logs.filter((l) => l.topics[0] === chain.TOPIC.RootPosted).map((l) => l.topics[1]).reverse()
     .filter((root) => !seen.has(root) && seen.add(root));
-  const roots = (await Promise.all(posted.map(async (root) => ({
-    root,
-    block: Number(chain.toUint(await read(chain.SEL.rootBlock, BigInt(root)))),
-    postedAt: Number(chain.toUint(await read(chain.SEL.rootPostedAt, BigInt(root)))),
-  })))).filter((r) => r.postedAt > 0).sort((a, b) => b.postedAt - a.postedAt);
+  const roots = (await Promise.all(posted.map(async (root) => {
+    const [block, postedAt] = await Promise.all([
+      read(chain.SEL.rootBlock, BigInt(root)),
+      read(chain.SEL.rootPostedAt, BigInt(root)),
+    ]);
+    return { root, block: Number(chain.toUint(block)), postedAt: Number(chain.toUint(postedAt)) };
+  }))).filter((r) => r.postedAt > 0).sort((a, b) => b.postedAt - a.postedAt);
 
   const claimed = logs.find((l) => l.topics[0] === chain.TOPIC.Claimed);
   return {
