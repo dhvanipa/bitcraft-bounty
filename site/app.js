@@ -347,7 +347,8 @@ function renderCommands() {
       "shasum -a 256 -c ../bitcraft-leaderboard/onchain/groth16-setup.sha256",
       "cd ..",
     ].join("\n"),
-    mock: pod.replace("bounty-pod", "bounty-pod --mock").replace("claim.json", "dry-run.json"),
+    // a dry run writes no pod, so it takes no --out
+    mock: `"$HOLDINGS" bounty-pod --mock --block ${at} \\\n  --recipient ${to} --threshold ${bit} \\\n  ~/.bitcraft/objects/*.dobj`,
     prove: pod,
     wrap: [
       "pod2-onchain/target/release/wrap claim.json plonky2-proof",
