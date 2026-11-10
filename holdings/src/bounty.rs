@@ -13,7 +13,7 @@
 
 use std::{collections::HashSet, sync::Arc};
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use pod2::{
     frontend::entry,
     lang::Module,
@@ -161,7 +161,8 @@ pub fn rules() -> Result<Vec<ClassRule>> {
         .collect()
 }
 
-/// The hash of a class by name.
+/// The hash of a class by name, for the tests' items.
+#[cfg(test)]
 pub fn class_hash(name: &str) -> Result<Hash> {
     let (_, hex) = CLASSES
         .iter()
@@ -534,6 +535,8 @@ mod tests {
         frontend::MultiPodBuilder,
         middleware::{Params, StrKey, VDSet},
     };
+
+    use anyhow::anyhow;
 
     use super::*;
     use crate::live::{context, testing::State};

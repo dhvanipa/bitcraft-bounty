@@ -64,7 +64,7 @@ On a fresh Ubuntu box (we use an m7i.large: 2 vCPUs, 8 GB, 96 GB disk), from
 a Mac with the game's source:
 
 ```bash
-RPC_FROM=ubuntu@GAME-SERVER synchronizer/deploy.sh ubuntu@HOST KEY.pem /path/to/digital-objects-network
+RPC_URL_FILE=~/sepolia-rpc synchronizer/deploy.sh ubuntu@HOST KEY.pem /path/to/digital-objects-network
 ```
 
 copies the game's source at `616e0eb` and this folder to the box and runs
@@ -74,10 +74,11 @@ builds both services, makes a `holdsync` user and database, writes root-only
 env files (`/etc/holdings-synchronizer.env`, `/etc/holdings-archiver.env`) and
 starts both services. Re-running rebuilds and keeps the data.
 
-`RPC_FROM` names a box running bitcraft-agent's relayer. Its Sepolia
-`RPC_URL`, which carries an API token, is piped from that box's root-only env
-file to the new box's, never printed or written elsewhere. Without it the
-services use the public node, which rate-limits a catch-up.
+`RPC_URL_FILE` is a local file holding a Sepolia RPC URL (or `RPC_FROM`
+names another box of yours whose root-only env file has `RPC_URL=`; see
+[deploy.sh](deploy.sh)). RPC URLs usually carry an API token, so the URL is
+piped to the box's root-only env files, never printed or written elsewhere.
+Without one the services use the public node, which rate-limits a catch-up.
 
 Then the poster, once the synchronizer has caught up:
 
@@ -144,10 +145,10 @@ Encrypt certificate for each name, renews it, and redirects HTTP to HTTPS.
 Before running it:
 
 1. give the box an Elastic IP: an instance's own public IP changes when it
-   stops (ours went from 3.148.104.216 to the Elastic IP 3.135.44.34);
-2. point both names' A records at it, **DNS only** in Cloudflare: Cloudflare's
-   free proxy certificate covers `*.pateldhvani.com` but not second-level
-   names like `synchronizer.don.pateldhvani.com`;
+   stops;
+2. point both names' A records at it. Ours are **DNS only** in Cloudflare:
+   Cloudflare's free proxy certificate covers `*.pateldhvani.com` but not
+   second-level names like `synchronizer.don.pateldhvani.com`;
 3. open TCP 80 and 443 to everyone in the security group.
 
 ```bash
@@ -177,7 +178,7 @@ synchronizer sees which items a prover asks about.
 | CPU during the catch-up | load average 0.3 to 0.4 of 2 vCPUs: the archiver fetches one slot at a time, so request latency sets the pace |
 | disk after the catch-up (7 days of chain) | archived blobs 7.2 GB (about 1 GB per day), synchronizer 2.7 GB, Postgres 81 MB; 72 GB free |
 | state roots against the hosted synchronizer | equal at all 16 blocks compared, from the first state (block 12049833) to the finalized block 12098006 |
-| the relayer sharing the RPC | no errors in its journal during the catch-up |
+| our player's relayer, sharing the RPC | no errors in its journal during the catch-up |
 
 The synchronizer runs 2 slots behind the archiver while catching up and logs
 "archived blobs ... not available yet" each time it waits for it; that
@@ -185,7 +186,7 @@ warning is expected.
 
 ## Shared RPC
 
-The synchronizer and the archiver use the same Sepolia RPC as the game
-server's relayer. While catching up they make many more requests than the
-relayer does, so if the RPC plan has a rate limit, the relayer can see
-errors during the catch-up.
+Ours share a Sepolia RPC with our game player's relayer. While catching up
+the synchronizer and the archiver make many more requests than a player does,
+so on a rate-limited RPC plan, whatever shares it can see errors during the
+catch-up. The relayer saw none on 2026-11-09.
