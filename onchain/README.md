@@ -18,8 +18,9 @@ generates a Solidity verifier for it.
    item's `Holds(state_root, type, tag)`, live at the synchronizer's state, as
    the pod's only public statement. A contract reads the pod's one statement,
    so this pod names no player.
-2. `wrap pod.json plonky2-proof/` (pod2-onchain at `d3ab486`, branch
-   `fixed-verifier-data`) wraps it. The wrapper circuit verifies the MainPod
+2. `wrap pod.json plonky2-proof/`
+   ([dhvanipa/pod2-onchain](https://github.com/dhvanipa/pod2-onchain) at
+   `de77b6a`, its `main`) wraps it. The wrapper circuit verifies the MainPod
    proof against the MainPod circuit (a constant), fixes the verifier-data set
    to pod2's default, rebuilds the statement from its public inputs and
    checks that it is the pod's statement. Its 24 public inputs are the
@@ -30,7 +31,8 @@ generates a Solidity verifier for it.
    public statement, since the predicate's hash is a public input, so this
    one setup serves `Holds` and `BountyClaim` alike.
    `go run cli/main.go -p -i plonky2-proof -o groth` proves, and writes
-   `solidity_calldata.json`: the verifier's arguments.
+   `solidity_calldata.json`: the verifier's arguments. To prove for the
+   verifier here, use [its setup](#the-groth16-setup), not a new one.
 4. [src/HoldsCheck.sol](src/HoldsCheck.sol) takes those arguments. It checks
    that the claim is a `Holds` claim, that its state root is one the owner
    posted, that the unused arguments are zero, and that the Groth16 proof
@@ -55,8 +57,8 @@ unchanged.
 | gnark's own verification | 1.5 ms | | |
 
 The Groth16 rows are from the fixed circuit (below). The setup was measured
-on an idle machine; the `holdings` rows and the later proofs with the Mac
-helper's GPU search on its medium setting (load average about 15). The first
+on an idle machine; the `holdings` rows and the later proofs with a GPU
+search for the game's geodes running alongside (load average about 15). The first
 measurements, made while other proofs ran, were about 17 minutes for the
 setup and 36.6 s plus 236 s for the proof.
 
@@ -91,7 +93,8 @@ digest) as a secret input, so its Groth16 key accepted a proof of any plonky2
 circuit shaped like the wrapper. A look-alike wrapper that skips the MainPod
 check could have proved any 24 public inputs: any class, any state root.
 
-pod2-onchain's branch `fixed-verifier-data` compiles the verifier data into
+pod2-onchain's `fixed-verifier-data` (merged into dhvanipa/pod2-onchain's
+`main` as `de77b6a`) compiles the verifier data into
 the circuit as constants (11,301 secret inputs instead of 11,318). The setup
 was re-run, and `src/Verifier.sol` and the fixture here come from the new one.
 The new verifier rejects the proof made under the old setup
@@ -163,6 +166,28 @@ the deadline; roots posted by anyone but the poster, the owner included;
 changing the poster; and the refund, only to the owner, only after the
 deadline, and not after a claim.
 
+## The Groth16 setup
+
+`src/Verifier.sol` holds the verifying key of one setup, run on 2026-11-09.
+A proof made with any other proving key fails it, so every claim needs that
+setup's proving key: the release
+[groth16-setup-1](https://github.com/dhvanipa/bitcraft-leaderboard/releases/tag/groth16-setup-1)
+has `r1cs` (322 MB), `proving.key` (1.36 GB) and `verifying.key`, which
+pod2-onchain's prover reads from its output folder.
+[groth16-setup.sha256](groth16-setup.sha256) has their SHA-256 sums:
+
+```bash
+mkdir groth && cd groth
+for f in r1cs proving.key verifying.key; do
+  curl -fLO https://github.com/dhvanipa/bitcraft-leaderboard/releases/download/groth16-setup-1/$f
+done
+shasum -a 256 -c ../onchain/groth16-setup.sha256
+```
+
+Running the setup again (`-t`) makes a new key pair, and a new
+`Verifier.sol` to deploy with it: the fixtures here and any deployed
+verifier would no longer accept its proofs.
+
 ## Run the tests
 
 ```bash
@@ -191,6 +216,10 @@ forge create src/BountyEscrow.sol:BountyEscrow --rpc-url $SEPOLIA --account OWNE
   --constructor-args $VERIFIER $USDC $PREDICATE $THRESHOLD $DEADLINE $POSTER
 cast send $USDC 'transfer(address,uint256)' $BOUNTY 100000000 --rpc-url $SEPOLIA --account OWNER   # 100 USDC
 ```
+
+Then start the poster with the bounty's address
+([../synchronizer/](../synchronizer/README.md#deploy)) and set `bounty` in
+[../site/config.js](../site/config.js), so the bounty page shows it.
 
 Sizes (`forge build --sizes`): `Verifier` 9,355 bytes, `BountyEscrow`
 4,182 bytes, both well under the 24,576-byte limit.

@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bitcraft bounty</title>
+<meta name="description" content="A Sepolia contract pays its prize to the first zero-knowledge proof of 50,000,000 BIT in unspent Bitcraft items. Live status, how to claim, and a claim checker.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&family=Spline+Sans+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header class="top">
+  <a class="mark" href="./">Bitcraft bounty</a>
+  <nav aria-label="Sections">
+    <a href="#claim">How to claim</a>
+    <a href="#check">Check a claim</a>
+    <a href="#trust">What you trust</a>
+    <a data-href="repo" href="https://github.com/dhvanipa/bitcraft-leaderboard">Source</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="notice">
+      <p id="status" class="status" data-state="loading" aria-live="polite">Reading the contract…</p>
+      <h1 id="headline">A prize for the first proof of 50,000,000 BIT in unspent Bitcraft items</h1>
+      <p class="lede">
+        A contract on Sepolia pays its whole balance to the first zero-knowledge
+        proof that someone holds unspent Bitcraft items worth at least
+        <span data-fill="threshold">50,000,000</span> BIT, counted as the Bitcraft
+        app counts them, at a state of the game posted in the last 24 hours.
+        The proof names who gets paid. It doesn't show which items, or how many.
+      </p>
+      <p class="actions">
+        <a class="button" href="#claim">How to claim</a>
+        <a class="button quiet" href="#check">Check a claim</a>
+      </p>
+    </div>
+
+    <aside class="core" aria-labelledby="core-title">
+      <h2 id="core-title">States you can claim at</h2>
+      <p class="core-note">A root is posted each hour. A claim must use one posted in the last 24 hours.</p>
+      <div class="core-body">
+        <div class="axis" aria-hidden="true">
+          <span style="top:0">now</span>
+          <span style="top:25%">6 h</span>
+          <span style="top:50%">12 h</span>
+          <span style="top:75%">18 h</span>
+          <span style="top:100%">24 h</span>
+        </div>
+        <ol id="column" class="column" aria-label="Posted state roots, newest first"></ol>
+      </div>
+      <div id="root-detail" class="root-detail" aria-live="polite"></div>
+    </aside>
+  </section>
+
+  <section class="terms" aria-labelledby="terms-title">
+    <h2 id="terms-title">The terms</h2>
+    <dl id="terms"></dl>
+  </section>
+
+  <section id="claim" class="claim" aria-labelledby="claim-title">
+    <h2 id="claim-title">How to claim</h2>
+    <p class="intro">
+      You prove on your own machine, from your item files. You need git, Rust
+      (nightly), Go 1.24, about 2 GB of disk for the proving key and 10 GB of
+      memory for the last step. The first time takes about half an hour, most
+      of it building; later claims take minutes.
+    </p>
+
+    <div class="fields">
+      <label>
+        <span>Pay to</span>
+        <input id="recipient" autocomplete="off" spellcheck="false" placeholder="0x… your Sepolia address">
+      </label>
+      <label>
+        <span>State at block</span>
+        <input id="block" inputmode="numeric" autocomplete="off" placeholder="from the roots above">
+      </label>
+    </div>
+    <p id="field-note" class="field-note" aria-live="polite"></p>
+
+    <ol class="steps">
+      <li>
+        <h3>Build the prover and the wrapper</h3>
+        <p>Once. <code>holdings</code> builds inside the game's own workspace, at the release the network runs, so it hashes items as the network does.</p>
+        <pre><code data-cmd="build"></code></pre>
+      </li>
+      <li>
+        <h3>Download the Groth16 setup</h3>
+        <p>Once, 1.7 GB. The contract's verifier was generated from this setup, so a claim needs its proving key. The sums are also in the repository.</p>
+        <pre><code data-cmd="setup"></code></pre>
+      </li>
+      <li>
+        <h3>Pick a state and stop playing</h3>
+        <p>
+          Your item files must hold your items as they were at the state's
+          block. Pick a root whose block came after your last action in the
+          game, and don't play again until you've proved. Roots are posted
+          hourly, about 16 minutes behind the chain. Choosing one in the
+          column above fills in its block.
+        </p>
+      </li>
+      <li>
+        <h3>Dry run</h3>
+        <p>Counts your live items at that state with pod2's mock prover and picks the fewest, most valuable ones that reach the threshold. It prints the claim by class, or how far short you are.</p>
+        <pre><code data-cmd="mock"></code></pre>
+      </li>
+      <li>
+        <h3>Prove</h3>
+        <p>The same, for real. On an M3 Pro, 61 items took 264 s and 4 GB. Your files stay on your machine; the synchronizer is asked for each item's proof of creation and of not being spent.</p>
+        <pre><code data-cmd="prove"></code></pre>
+      </li>
+      <li>
+        <h3>Wrap the proof for Ethereum</h3>
+        <p>The wrapper takes about 15 s. The Groth16 proof takes about 2 minutes after loading the proving key, and 10 GB of memory. It writes <code>groth/solidity_calldata.json</code>.</p>
+        <pre><code data-cmd="wrap"></code></pre>
+      </li>
+      <li>
+        <h3>Check it and send it</h3>
+        <p>Paste <code>groth/solidity_calldata.json</code> below, before the root's 24 hours are up.</p>
+      </li>
+    </ol>
+  </section>
+
+  <section id="check" class="check" aria-labelledby="check-title">
+    <h2 id="check-title">Check and send your claim</h2>
+    <p class="intro">
+      The page reads the claim as the contract does, then asks a Sepolia node
+      whether it would pay. Nothing is sent until you press Send.
+    </p>
+    <div class="drop" id="drop">
+      <label for="claim-input">solidity_calldata.json</label>
+      <textarea id="claim-input" rows="6" spellcheck="false" placeholder='{"proof": [...], "commitments": [...], "commitmentPok": [...], "input": [...]}'></textarea>
+      <div class="drop-row">
+        <button id="check-button" class="button" type="button">Check the claim</button>
+        <label class="file">Or choose the file <input id="claim-file" type="file" accept=".json,application/json"></label>
+      </div>
+    </div>
+    <ul id="checks" class="checks" aria-live="polite"></ul>
+    <div id="send" class="send" hidden>
+      <button id="send-button" class="button" type="button">Send the claim from your wallet</button>
+      <p id="send-status" class="send-status" aria-live="polite"></p>
+      <p>Or send it with Foundry. Anyone may send it: the proof decides who is paid.</p>
+      <pre><code id="cast-send"></code></pre>
+    </div>
+  </section>
+
+  <section class="shows" aria-labelledby="shows-title">
+    <h2 id="shows-title">What a claim shows</h2>
+    <div class="split">
+      <div>
+        <h3>Public</h3>
+        <ul>
+          <li>the address the prize goes to;</li>
+          <li>the state root the items were held at;</li>
+          <li>that their values add up to at least the threshold;</li>
+          <li>the predicate proved, which fixes every class's value.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Private</h3>
+        <ul>
+          <li>which items, how many, and what each is worth;</li>
+          <li>their nullifiers, so no one can watch for them being spent;</li>
+          <li>their tags, the IDs that stay the same across an item's states.</li>
+        </ul>
+      </div>
+    </div>
+    <p class="aside">
+      The synchronizer you prove against learns which items you asked about.
+      Prove against your own (<code>--sync URL</code>) to keep that private;
+      the synchronizer folder in the repository shows how to run one.
+    </p>
+  </section>
+
+  <section id="trust" class="trust" aria-labelledby="trust-title">
+    <h2 id="trust-title">What you have to trust</h2>
+    <p class="intro">This is a test-token bounty. Three things keep it from being one for real money:</p>
+    <ul>
+      <li>
+        <strong>The Groth16 setup is one machine's.</strong> Whoever ran it could
+        forge proofs for this verifier. A bounty for real money needs a
+        multi-party setup, or a proof system with a universal one.
+      </li>
+      <li>
+        <strong>The root poster is trusted.</strong> A made-up state root can
+        commit to made-up items, so the poster's key is worth the prize. The
+        poster takes each root from a synchronizer that checks every
+        transaction's proof itself and compares it with the game's hosted one
+        before posting; this page compares the newest root with both too. The
+        contract can't check either.
+      </li>
+      <li>
+        <strong>A claim is about one posted state, not now.</strong> Items held
+        at that state can be spent afterwards and the claim still pays.
+      </li>
+    </ul>
+  </section>
+
+  <section class="run" aria-labelledby="run-title">
+    <h2 id="run-title">Run it yourself</h2>
+    <ul class="links" id="links"></ul>
+  </section>
+</main>
+
+<footer class="foot">
+  <p>Built on <a data-href="game" href="https://github.com/0xPARC/digital-objects-network">Digital Objects</a>, <a href="https://github.com/0xPARC/pod2">pod2</a> and <a data-href="pod2Onchain" href="https://github.com/dhvanipa/pod2-onchain">pod2-onchain</a>. Values in BIT are those of the Bitcraft app's Total Inventory Value.</p>
+</footer>
+</body>
+</html>
