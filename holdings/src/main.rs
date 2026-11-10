@@ -190,8 +190,28 @@ fn read_item(path: &Path) -> Result<ItemFile> {
     Ok(item)
 }
 
-fn read_object(path: &Path) -> Result<Dictionary> {
-    Ok(read_item(path)?.obj)
+/// The Bitcraft item files among `paths`, so a whole objects folder can be
+/// given. Any other file is skipped with one note: on 2026-11-10 a Mac app's
+/// folder held 89 files from before the current network started (2026-11-02),
+/// saved in an older layout with no `metadata`, which can't be live now.
+fn read_items(paths: &[PathBuf]) -> Result<Vec<(PathBuf, ItemFile)>> {
+    let mut items = Vec::new();
+    let mut unreadable = Vec::new();
+    for path in paths {
+        match read_item(path) {
+            Ok(item) => items.push((path.clone(), item)),
+            Err(err) => unreadable.push(format!("{err:#}")),
+        }
+    }
+    if let Some(first) = unreadable.first() {
+        eprintln!(
+            "skip   {} of {} files, which aren't Bitcraft item files; the first: {first}",
+            unreadable.len(),
+            paths.len()
+        );
+    }
+    ensure!(!items.is_empty(), "none of the {} files is a Bitcraft item file", paths.len());
+    Ok(items)
 }
 
 /// Proves `BountyClaim(state_header, recipient, threshold)` for the items, as a
@@ -211,12 +231,13 @@ fn bounty_pod(
     all: bool,
     mock: bool,
 ) -> Result<()> {
-    let objects = items.iter().map(|p| read_object(p)).collect::<Result<Vec<_>>>()?;
+    let files = read_items(items)?;
+    let objects: Vec<Dictionary> = files.iter().map(|(_, f)| f.obj.clone()).collect();
     let witness = fetch_witness(sync, block, &objects)?;
     let header = witness.header();
     let (live, skipped) = bounty::live_items(objects, &witness)?;
     for (i, name, why) in &skipped {
-        let file = items[*i].file_name().unwrap_or_default().to_string_lossy();
+        let file = files[*i].0.file_name().unwrap_or_default().to_string_lossy();
         eprintln!("skip   {name:<12} {file}: {why}");
     }
     ensure!(!live.is_empty(), "no item is live and worth something at block {}", witness.block_number);
@@ -419,8 +440,8 @@ fn prove(
 
     // One state for every item: the synchronizer's proofs that each was
     // created, and is unspent, there.
-    let files = items.iter().map(|p| read_item(p)).collect::<Result<Vec<_>>>()?;
-    let objects: Vec<Dictionary> = files.iter().map(|f| f.obj.clone()).collect();
+    let files = read_items(items)?;
+    let objects: Vec<Dictionary> = files.iter().map(|(_, f)| f.obj.clone()).collect();
     let witness = fetch_witness(sync, block, &objects)?;
     let header = witness.header();
     eprintln!(
@@ -430,7 +451,7 @@ fn prove(
     );
     let mut live = Vec::new();
     let mut skipped = 0;
-    for ((path, file), item) in items.iter().zip(&files).zip(live_objects(objects, &witness)?) {
+    for ((path, file), item) in files.iter().zip(live_objects(objects, &witness)?) {
         let name = &file.metadata.class.name;
         let file_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         match item {
