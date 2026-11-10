@@ -1,6 +1,9 @@
 # holdings: prove what you hold
 
-A prototype of a Bitcraft leaderboard whose scores are proofs.
+The prover and verifier: proofs of which Bitcraft items a player holds,
+unspent, without showing them. The bounty's claims are made with it
+([A bounty claim](#a-bounty-claim)), and so could the scores of a leaderboard
+whose scores are proofs, the use it was first written for.
 
 Today's leaderboard is the game's Discord bot. It reads the Total Inventory
 Value that the Bitcraft app shares as a Discord presence, and its own README

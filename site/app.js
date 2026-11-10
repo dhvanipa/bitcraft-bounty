@@ -338,13 +338,13 @@ function renderCommands() {
       `git clone ${config.game}`,
       `git clone ${config.repo}`,
       `git clone ${config.pod2Onchain}`,
-      `HOLDINGS=$(bitcraft-leaderboard/holdings/build.sh "$PWD/digital-objects-network")`,
+      `HOLDINGS=$(bitcraft-bounty/holdings/build.sh "$PWD/digital-objects-network")`,
       `(cd pod2-onchain && cargo +nightly build --release --bin wrap && go build -o groth16 ./cli)`,
     ].join("\n"),
     setup: [
       "mkdir -p groth && cd groth",
       ...Object.keys(setup.files).map((f) => `curl -fLO ${setup.base}/${f}`),
-      "shasum -a 256 -c ../bitcraft-leaderboard/onchain/groth16-setup.sha256",
+      "shasum -a 256 -c ../bitcraft-bounty/onchain/groth16-setup.sha256",
       "cd ..",
     ].join("\n"),
     // a dry run writes no pod, so it takes no --out

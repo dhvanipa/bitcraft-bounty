@@ -1,7 +1,7 @@
 name: pages
 
 # Publishes site/ as it is (no build step) to
-# https://dhvanipa.github.io/bitcraft-leaderboard/ on every push to main that
+# https://dhvanipa.github.io/bitcraft-bounty/ on every push to main that
 # changes it.
 on:
   push:

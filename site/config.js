@@ -13,13 +13,13 @@ export default {
     { name: "the game's synchronizer", url: "https://synchronizer.digiobjects.net" },
   ],
   explorer: "https://sepolia.etherscan.io",
-  repo: "https://github.com/dhvanipa/bitcraft-leaderboard",
+  repo: "https://github.com/dhvanipa/bitcraft-bounty",
   game: "https://github.com/0xPARC/digital-objects-network",
   pod2Onchain: "https://github.com/dhvanipa/pod2-onchain",
   // The Groth16 setup src/Verifier.sol was generated from. A claim needs its
   // proving key. Sums: onchain/groth16-setup.sha256 (test.mjs checks they match).
   setup: {
-    base: "https://github.com/dhvanipa/bitcraft-leaderboard/releases/download/groth16-setup-1",
+    base: "https://github.com/dhvanipa/bitcraft-bounty/releases/download/groth16-setup-1",
     files: {
       r1cs: "3b72086e3bd3de899ab1fb3a9c323d0b10cbe1eb2e9f0d836b598d832c2ad4fc",
       "proving.key": "d094f61ec9708d8f462520342e113d031fa21d7314bdc60ca20d6f481c9c5c7b",
