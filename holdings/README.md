@@ -115,7 +115,7 @@ them down while it runs.
 ## Measured (2026-11-09, Mac M3 Pro, 11 cores)
 
 At Sepolia block 12098387, against our synchronizer through an SSH tunnel,
-with the Mac helper's GPU search running on its medium setting (load average
+with a GPU search for the game's geodes running alongside (load average
 about 15):
 
 | Proof | Wall time | CPU time | Peak memory | File size |
@@ -129,7 +129,7 @@ That is about 1.5 s of wall time per item; each pod of 9 items took 13.1 to
 The same 50 items took 153 s (569 s of CPU) with the earlier `Holds`, which
 did not prove nullifiers absent, under a load on the Mac that was not
 recorded, so the two runs don't measure a speed-up. The load matters: 11
-items took 21 s in one run and 43 s in another while the helper's search used
+items took 21 s in one run and 43 s in another while the GPU search used
 950% CPU.
 
 Checking the 6 pods took 0.02 s, and the whole `verify` 1.24 s: one
@@ -149,7 +149,7 @@ hosted one:
 | one character of a pod's proof changed | plonky2 verification fails (invalid Merkle proof) |
 | a mock pod | refused as a mock |
 | an Emerald's file relabelled as a Diamond | skipped: its commitment is not in the created array ("not created at this state"); the circuit refuses it too (the `an_item_not_in_the_state` test) |
-| 100 items from an old copy of the server's inventory | 91 skipped as spent at block 12098387, 9 proved |
+| 100 items from an old copy of our test player's inventory | 91 skipped as spent at block 12098387, 9 proved |
 | the same pod twice in one file | refused: an object claimed twice |
 | the file's block or state root changed | refused: the root is not the network's at that block, or the claims are about another root |
 | pods from two players, at one state, merged into one file | refused: different players |
@@ -232,15 +232,16 @@ planned 31 pods in 6 s, and one of 300 items 92 pods in 52 s. A whole
 inventory of about 4,800 items would take hours to plan before proving
 about 1,500 pods (an extrapolation, not a measurement), which is why
 `bounty-pod` takes the fewest, most valuable items that reach the
-threshold. On 2026-11-09 at 17:18 UTC, given all 4,643 of the server's item
+threshold. On 2026-11-09 at 17:18 UTC, given all 4,643 of our test player's item
 files, it found 4,407 live at block 12098857, worth 9,367,903.69 BIT, and for
 a threshold of 7,000,000 BIT claimed 61 of them, 6 Emeralds and 55
 Sapphires: 1,165 statements in 19 pods, proved in 264 s (315 s with reading
-the files and fetching their witness; 4.1 GB; the Mac helper's search on
-medium).
+the files and fetching their witness; 4.1 GB; the GPU search running
+alongside).
 
-The app's rules, reimplemented in Python over the server's 5,036 live item
-files, gave exactly the dashboard's 9,447,022.73 BIT. A dry run of the
+The app's rules, reimplemented in Python over our player's 5,036 live item
+files, gave exactly the 9,447,022.73 BIT its dashboard showed (the app's
+Total Inventory Value). A dry run of the
 claim at the finalized block 12098606, against the same files, counted 4,831
 items worth 9,356,867.23 BIT, the same values class by class, and skipped
 169 whose current state was created after that block: a MiningDrill
@@ -249,7 +250,7 @@ counts the item states that exist at its root, so an inventory that keeps
 changing needs its files from that root's time, or a pause until the next
 posted root.
 
-On 2026-11-09 (M3 Pro, the Mac helper on medium) 19 real items of every
+On 2026-11-09 (M3 Pro, the GPU search running alongside) 19 real items of every
 kind, live at block 12098545, proved at a threshold of exactly their value,
 2,487,006 BIT, in 102 s and 4.1 GB: 397 statements in 7 pods. A Python
 reimplementation of the app's rules, run over the same item files, gave the
