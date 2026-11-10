@@ -69,6 +69,7 @@ On-chain (Foundry, `forge test -vv`):
 | `Verifier.verifyProof` | 543,110 |
 | `HoldsCheck.check` (input checks, root lookup, verify) | 548,057 |
 | `BountyEscrow.claim`, real proof, paying a mock token | 597,422 |
+| `BountyEscrow.claim` on Sepolia, paying Circle's USDC (2026-11-10, below) | 739,086 |
 
 The 24 public inputs cost about a quarter of that: each is a scalar
 multiplication in the verifier. A bounty statement with fewer or packed
@@ -246,6 +247,19 @@ against 47,855 on a local anvil chain on 2026-11-09, which suggests Sepolia
 now charges much more for new state. At that day's gas price of 68 wei a post
 cost about 1.6 × 10⁻¹¹ ETH; at 1 gwei, the poster's 1 ETH would last about
 4,000 posts, some 170 days.
+
+### The first claim paid on Sepolia (2026-11-10)
+
+A test bounty, [`0x364a2F8aA95030d31CB0CB49496232a552D07ea4`](https://sepolia.etherscan.io/address/0x364a2F8aA95030d31CB0CB49496232a552D07ea4),
+the same contract and verifier at a threshold of 2,000,000 BIT, funded with
+1 USDC, with the root at block 12103547 posted to it from the box. Its owner
+proved 3 Emeralds from a fresh clone, following the bounty page's steps:
+built `holdings` and the wrapper, downloaded the published setup, ran the
+dry run, proved, wrapped and made the Groth16 proof; then checked the claim
+on the page and sent it from a browser wallet. The contract verified it and
+paid 1 USDC to the recipient the proof named:
+[`0x7829dfc2…e737e`](https://sepolia.etherscan.io/tx/0x7829dfc2fd636ace84540e8c78edc335ca92125392d4a1bd7323e8ba151e737e),
+block 12103919, 739,086 gas, against 597,422 on a local chain.
 
 ## Not for real money yet
 

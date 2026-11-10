@@ -226,16 +226,38 @@ valuable first; `--all` claims every item instead. It prints the claim by
 class, and refuses a total below the threshold.
 
 `--mock` checks every operation of the same claim with pod2's mock prover,
-without proving it: a dry run that shows what a claim would count. Its pod
-can't be wrapped.
+without proving it: a dry run that shows what a claim would count. It writes
+no pod, since a mock pod can't be wrapped, so it takes no `--out`.
 
-A claim's cost grows faster than its item count, in pod2's planning of how
-to split the statements across pods: on 2026-11-09 a dry run of 100 items
-planned 31 pods in 6 s, and one of 300 items 92 pods in 52 s. A whole
-inventory of about 4,800 items would take hours to plan before proving
-about 1,500 pods (an extrapolation, not a measurement), which is why
+A claim's cost grows with its item count, not its value, which is why
 `bounty-pod` takes the fewest, most valuable items that reach the
-threshold. On 2026-11-09 at 17:18 UTC, given all 4,643 of our test player's item
+threshold. Where the time goes, timed on 2026-11-10 (M3 Pro) in dry runs at
+block 12103547 over a Mac's 3,560 item files:
+
+| Items | building the statements | pod2's planner | mock proving | writing the mock pod |
+|---:|---:|---:|---:|---:|
+| 150 | 1.5 s | 0.1 s | 0.2 s | 5.5 s, 66 MB |
+| 300 | 8.4 s | 2.7 s | 0.5 s | 29.5 s, 203 MB |
+| 500 | 27.9 s | 4.4 s | 1.2 s | 118.5 s, 556 MB |
+
+- **The mock pod** records every statement, each `SetInsert` with the whole
+  set of tags so far, so its JSON grows with the square of the items. No one
+  can use it, so since 2026-11-10 a dry run doesn't write it: the 500-item
+  dry run went from 195 s to 95 s, of which about 45 s is reading all the
+  files and fetching their witness.
+- **Building** is quadratic too, in pod2: `MultiPodBuilder` finds each new
+  statement's index by scanning every earlier one (`stmt_index`), and a claim
+  makes about 20 statements per item. An index there would make it linear
+  without changing any proof; at 2,000 items it would save several minutes.
+- **The planner** (`MultiPodBuilder::solve`, a dynamic program over a few
+  orderings) is the smallest part. The 2026-11-09 figures (100 items planned
+  in 6 s, 300 in 52 s) counted the mock pod's writing as planning.
+- **Proving for real** is linear: about 3 items per pod and 14 s per pod, so
+  about 4.5 s per item. 61 items took 264 s (below); 2,000 cheap items would
+  take about 2.5 hours (an extrapolation). Only a predicate with fewer
+  statements per item, and a new deployment, would change that.
+
+On 2026-11-09 at 17:18 UTC, given all 4,643 of our test player's item
 files, it found 4,407 live at block 12098857, worth 9,367,903.69 BIT, and for
 a threshold of 7,000,000 BIT claimed 61 of them, 6 Emeralds and 55
 Sapphires: 1,165 statements in 19 pods, proved in 264 s (315 s with reading

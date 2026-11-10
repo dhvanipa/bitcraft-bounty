@@ -64,6 +64,7 @@ synchronizer posted an hour apart:
 | the same claim with one recipient limb changed | refused: `ProofInvalid` |
 | the claim against a 50,000,000 BIT bounty with no roots | wrong threshold, root never posted, and the contract's own "state root not posted" |
 | the claim sent with the page's `cast send` command | paid 100 USDC; the page then shows "Claimed" |
+| on Sepolia, a real 3-Emerald claim against a 2,000,000 BIT test bounty, checked on the live page and sent from a browser wallet | paid 1 USDC ([0x7829dfc2…](https://sepolia.etherscan.io/tx/0x7829dfc2fd636ace84540e8c78edc335ca92125392d4a1bd7323e8ba151e737e)) |
 | no bounty configured | the planned terms and "Not deployed yet" |
 
 `chain.js`'s calldata for the fixture equals `cast calldata` byte for byte.

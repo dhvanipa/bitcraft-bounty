@@ -77,7 +77,7 @@ fn usage() -> ! {
   holdings prove --player NAME [--sync URL] [--block N] --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
   holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json
   holdings onchain-pod [--sync URL] [--block N] --out POD.json ITEM.dobj
-  holdings bounty-pod [--sync URL] [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json [--all] [--mock] ITEM.dobj...
+  holdings bounty-pod [--sync URL] [--block N] --recipient 0xADDRESS --threshold BIT (--out POD.json | --mock) [--all] ITEM.dobj...
   holdings bounty-info --threshold BIT [--recipient 0xADDRESS] [--pexe BITCRAFT.pexe]"
     );
     std::process::exit(2)
@@ -141,15 +141,18 @@ fn main() -> Result<()> {
         "bounty-pod" => {
             ensure!(!paths.is_empty(), "no item files given");
             let threshold = centi_bit(&flag("--threshold"))?;
+            let mock = switches.contains("--mock");
+            // a dry run writes nothing, so it needs no --out
+            let out = if mock { None } else { Some(PathBuf::from(flag("--out"))) };
             bounty_pod(
                 &witness_sync,
                 block,
                 &flag("--recipient"),
                 threshold,
-                Path::new(&flag("--out")),
+                out.as_deref(),
                 &paths,
                 switches.contains("--all"),
-                switches.contains("--mock"),
+                mock,
             )
         }
         "bounty-info" => {
@@ -219,14 +222,14 @@ fn read_items(paths: &[PathBuf]) -> Result<Vec<(PathBuf, ItemFile)>> {
 /// None) of a synchronizer with the holdings witness endpoint; writes the pod
 /// for pod2-onchain's `wrap`. With `mock`, pod2's mock prover checks every
 /// operation of the same claim without proving it, in a fraction of the
-/// time: a dry run, whose pod can't be wrapped.
+/// time: a dry run, which writes no pod, since a mock pod can't be wrapped.
 #[allow(clippy::too_many_arguments)]
 fn bounty_pod(
     sync: &str,
     block: Option<i64>,
     recipient: &str,
     threshold: i64,
-    out: &Path,
+    out: Option<&Path>,
     items: &[PathBuf],
     all: bool,
     mock: bool,
@@ -283,10 +286,20 @@ fn bounty_pod(
         .clone();
     pod.pod.verify().map_err(|err| anyhow!("own proof fails: {err}"))?;
     ensure!(pod.pod.pub_statements().len() == 1, "the pod has more than one public statement");
-    fs::write(out, serde_json::to_string(&pod)?)?;
+    // A mock pod can't be wrapped, and its JSON holds every statement with
+    // the growing set of tags in each, so it grows with the square of the
+    // items: 556 MB for 500 items on 2026-11-10, taking 118 s to write, more
+    // than the rest of the dry run. A dry run writes nothing.
+    let written = match out {
+        Some(out) => {
+            fs::write(out, serde_json::to_string(&pod)?)?;
+            format!("pod in {}", out.display())
+        }
+        None => "dry run, so no pod written".to_string(),
+    };
     eprintln!(
         "claimed {} items worth {} BIT (threshold {} BIT; skipped {}) for {recipient} in {:.1} s{}, \
-         against state root {} (block {}); pod in {}",
+         against state root {} (block {}); {written}",
         live.len(),
         total as f64 / 100.0,
         threshold as f64 / 100.0,
@@ -295,7 +308,6 @@ fn bounty_pod(
         if mock { " (mock)" } else { "" },
         encode_hash_hex(&witness.state_root),
         witness.block_number,
-        out.display()
     );
     Ok(())
 }
