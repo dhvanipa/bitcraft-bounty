@@ -6,6 +6,9 @@ Each folder's README explains its choices with the measurements behind them.
 
 ## Parts of this are live
 
+- **The bounty page** is published from `main`: a push that changes `site/`
+  goes live at <https://dhvanipa.github.io/bitcraft-leaderboard/> within a
+  minute or two ([pages.yml](.github/workflows/pages.yml)).
 - **The bounty contract on Sepolia** is immutable. It pins the `BountyClaim`
   predicate's hash, the threshold and the Groth16 verifier at deployment, so
   a change to any of them is a new deployment, not an edit.

@@ -72,7 +72,11 @@ horizontal scroll.
 
 ## Serving it
 
-Any static server works; the page fetches only from the RPCs and
+The page is live at <https://dhvanipa.github.io/bitcraft-leaderboard/>.
+[pages.yml](../.github/workflows/pages.yml) publishes `site/` as it is to
+GitHub Pages on every push to `main` that changes it.
+
+Any static server works too; the page fetches only from the RPCs and
 synchronizers in `config.js`. Locally:
 
 ```bash

@@ -14,8 +14,9 @@ use it:
 - **A bounty.** `BountyEscrow`, on Sepolia, pays its USDC balance to the first
   proof of unspent items worth at least 50,000,000 BIT, counted as the
   Bitcraft app counts them, at a state root posted in the last 24 hours.
-  [The bounty page](site/) shows whether it is open, which roots a claim can
-  use, how to claim, and checks a claim before it is sent.
+  [The bounty page](https://dhvanipa.github.io/bitcraft-leaderboard/)
+  ([site/](site/)) shows whether it is open, which roots a claim can use, how
+  to claim, and checks a claim before it is sent.
 
 Status: a working prototype on Sepolia testnet, tested on real items on
 2026-11-09 and 2026-11-10. It is not ready for real money: see
@@ -74,7 +75,8 @@ address.
 
 `holdings` builds inside the game's workspace because it uses the game's own
 libraries, at the release the network runs (v0.1.0-rc.50), so it hashes items
-exactly as the network does. CI runs the Foundry and Node tests.
+exactly as the network does. CI runs the Foundry and Node tests, and a push
+to `main` that changes `site/` publishes it to GitHub Pages.
 
 ## Contributing
 
