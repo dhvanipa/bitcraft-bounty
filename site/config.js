@@ -9,8 +9,8 @@ export default {
   rpcs: ["https://ethereum-sepolia-rpc.publicnode.com", "https://sepolia.gateway.tenderly.co"],
   // The newest root is checked against both; the poster checks them too.
   synchronizers: [
-    { name: "ours", url: "https://synchronizer.don.pateldhvani.com" },
-    { name: "the game's hosted one", url: "https://synchronizer.digiobjects.net" },
+    { name: "the bounty's synchronizer", url: "https://synchronizer.don.pateldhvani.com" },
+    { name: "the game's synchronizer", url: "https://synchronizer.digiobjects.net" },
   ],
   explorer: "https://sepolia.etherscan.io",
   repo: "https://github.com/dhvanipa/bitcraft-leaderboard",

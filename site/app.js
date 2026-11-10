@@ -293,7 +293,7 @@ function renderTerms(s) {
     row("Verifier", address(s.verifier),
       muted("the Groth16 verifier the contract calls to check a claim's proof; generated from the published setup"));
     row("Root poster", address(s.poster),
-      muted("posts the game's state root every hour from our synchronizer. The contract trusts it: a made-up root could hold made-up items"),
+      muted("posts the game's state root every hour, taken from the bounty's synchronizer and checked against the game's. The contract trusts it: a made-up root could hold made-up items"),
       el("span", {}, `${eth(s.posterBalance)} ETH left to pay for posting`));
     row("Owner", address(s.owner),
       muted("deployed and funded the bounty; can replace the root poster, and take the prize back only after the deadline, if no one claimed it"));
@@ -309,8 +309,8 @@ function renderLinks(s) {
     [`${config.repo}`, "The source", "contracts, predicates, prover and this page"],
     [`${config.repo}/blob/main/onchain/src/BountyEscrow.sol`, "BountyEscrow.sol", "what a claim must satisfy"],
     [`${config.repo}/blob/main/holdings/src/bounty.podlang`, "bounty.podlang", "the statement a claim proves"],
-    [`${config.synchronizers[0].url}/sync-progress`, "Our synchronizer", "the game's synchronizer, with an endpoint that proves an item unspent at a past state"],
-    ["https://archiver.don.pateldhvani.com/healthz", "Our archiver", "the network's blobs since its first slot, for running a synchronizer"],
+    [`${config.synchronizers[0].url}/sync-progress`, "The bounty's synchronizer", "a copy of the game's synchronizer that can also prove an item unspent at a past state; claims get their proofs from it"],
+    ["https://archiver.don.pateldhvani.com/healthz", "The bounty's archiver", "the network's data since its first slot, kept for anyone running a synchronizer"],
   ];
   if (s) items.splice(1, 0, [`${config.explorer}/address/${BOUNTY}#events`, "The contract's events", "every root posted, and the claim"]);
   $("links").replaceChildren(...items.map(([href, name, what]) => el("li", {}, link(href, name), el("span", {}, what))));
