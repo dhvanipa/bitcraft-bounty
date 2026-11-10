@@ -1,8 +1,8 @@
-// What the page reads. Set `bounty` to the BountyEscrow's address once it is
-// deployed; until then the page shows the planned terms. For testing,
-// `?bounty=0x…&rpc=http://127.0.0.1:8545` overrides both.
+// What the page reads: the BountyEscrow deployed on Sepolia on 2026-11-10
+// (onchain/README.md). With `bounty: null` the page shows the planned terms.
+// For testing, `?bounty=0x…&rpc=http://127.0.0.1:8545` overrides both.
 export default {
-  bounty: null,
+  bounty: "0x91d3219a384ab57262287ffc9d11b96ce7d1d434",
   chainId: 11155111,
   // Tried in order. Both send CORS headers and return 24 hours of logs in one
   // request (publicnode up to about 8,000 blocks; checked 2026-11-10).

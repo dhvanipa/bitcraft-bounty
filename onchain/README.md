@@ -222,7 +222,30 @@ Then start the poster with the bounty's address
 [../site/config.js](../site/config.js), so the bounty page shows it.
 
 Sizes (`forge build --sizes`): `Verifier` 9,355 bytes, `BountyEscrow`
-4,182 bytes, both well under the 24,576-byte limit.
+4,389 bytes, both well under the 24,576-byte limit.
+
+### Deployed (2026-11-10)
+
+| | |
+|---|---|
+| `BountyEscrow` | [`0x91d3219a384ab57262287fFc9d11b96cE7d1d434`](https://sepolia.etherscan.io/address/0x91d3219a384ab57262287fFc9d11b96cE7d1d434) |
+| `Verifier` | [`0xb5cA82616B29A68DacA8b475A40871b0aC0cFBDF`](https://sepolia.etherscan.io/address/0xb5cA82616B29A68DacA8b475A40871b0aC0cFBDF) |
+| token | Circle's USDC, `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
+| threshold | 50,000,000 BIT (`0xffffffff…0001000000002a05f200`) |
+| claim predicate | `0xaae74e677f89c82dc523ce1850a26d075d457f85bedbdf35005f3918526a772a` |
+| deadline | 1799496000, 2027-01-09 12:00 UTC |
+| poster | `0xfa9D2103fE14B4a64f90CF2272Fc079A6A44BcBc`, on the synchronizer's box |
+| owner | `0xE0ae70caBb529336e25FA7a1f036b77ad0089d2a` |
+
+The deployed verifier's runtime code is byte for byte this repository's
+`Verifier.sol`, and every setting above was read back from the contract.
+Deploying took far more gas than code deposit used to cost: 14,674,466 for
+the verifier (block 12103537) and 7,108,724 for the escrow (block 12103539).
+The poster's first `postRoot`, the state at block 12103484, took 240,084 gas,
+against 47,855 on a local anvil chain on 2026-11-09, which suggests Sepolia
+now charges much more for new state. At that day's gas price of 68 wei a post
+cost about 1.6 × 10⁻¹¹ ETH; at 1 gwei, the poster's 1 ETH would last about
+4,000 posts, some 170 days.
 
 ## Not for real money yet
 

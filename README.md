@@ -19,7 +19,9 @@ use it:
   to claim, and checks a claim before it is sent.
 
 Status: a working prototype on Sepolia testnet, tested on real items on
-2026-11-09 and 2026-11-10. It is not ready for real money: see
+2026-11-09 and 2026-11-10. The bounty is deployed at
+[`0x91d3219a384ab57262287fFc9d11b96cE7d1d434`](https://sepolia.etherscan.io/address/0x91d3219a384ab57262287fFc9d11b96cE7d1d434),
+open until 2027-01-09. It is not ready for real money: see
 [what you have to trust](onchain/README.md#not-for-real-money-yet).
 
 ## Why
