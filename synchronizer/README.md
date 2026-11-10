@@ -10,7 +10,15 @@ The hosted synchronizer (`synchronizer.digiobjects.net`) can't give one. Its
 `/v1/state/membership` answers only yes or no for a nullifier, and its
 `/v1/txlib/grounding-witness` proves created objects, not nullifiers, and
 only at its head, which moves every 12 s slot. So we run the game's own
-synchronizer with one patch, and its archiver, on a box of our own.
+synchronizer with one patch, and its archiver, on a box of our own, and
+serve both to anyone:
+
+- **synchronizer:** `https://synchronizer.don.pateldhvani.com`, the hosted
+  synchronizer's API plus `POST /v1/holdings/witness`. `holdings` uses it by
+  default.
+- **archiver:** `https://archiver.don.pateldhvani.com`, the network's blobs
+  since the genesis slot, kept after the beacon drops them (18 days), for
+  anyone running a synchronizer (`ARCHIVER_URL`).
 
 ## What runs
 
@@ -120,8 +128,45 @@ systemctl list-timers holdings-root-poster.timer
 journalctl -u holdings-root-poster -n 20
 ```
 
-The APIs listen on loopback only. To prove from a laptop, tunnel:
-`ssh -L 3000:127.0.0.1:3000 ubuntu@HOST`, then `--sync http://127.0.0.1:3000`.
+Both services listen on loopback only; Caddy serves them to the public
+(below).
+
+## Public endpoints
+
+| Name | Serves |
+|---|---|
+| `https://synchronizer.don.pateldhvani.com` | the synchronizer, 127.0.0.1:3000 |
+| `https://archiver.don.pateldhvani.com` | the archiver, 127.0.0.1:3001 |
+
+[install-proxy.sh](install-proxy.sh) installs Caddy from Ubuntu's archive
+(2.6.2) and proxies each name to its loopback port; Caddy gets a Let's
+Encrypt certificate for each name, renews it, and redirects HTTP to HTTPS.
+Before running it:
+
+1. give the box an Elastic IP: an instance's own public IP changes when it
+   stops (ours went from 3.148.104.216 to the Elastic IP 3.135.44.34);
+2. point both names' A records at it, **DNS only** in Cloudflare: Cloudflare's
+   free proxy certificate covers `*.pateldhvani.com` but not second-level
+   names like `synchronizer.don.pateldhvani.com`;
+3. open TCP 80 and 443 to everyone in the security group.
+
+```bash
+bash ~/sync-build/deploy/install-proxy.sh synchronizer.don.pateldhvani.com archiver.don.pateldhvani.com [EMAIL]
+```
+
+Both APIs only read, and both send permissive CORS headers themselves, so
+browsers can call them. Access logs go to `/var/log/caddy/`.
+
+On 2026-11-09, from a Mac: both certificates were issued within 5 s of
+Caddy's start (Let's Encrypt YE2, valid to 2027-02-07); the synchronizer's
+root at the finalized block equalled the hosted one's; `holdings prove`
+against the public URL fetched witnesses for 6 Emeralds in 1.1 s; and the
+archiver returned a slot's game blob (131,072 bytes) in 1.8 s.
+
+Two things to watch: the box has 2 vCPUs and Caddy's stock build has no rate
+limits, so heavy public use of the witness endpoint (up to 128 items per
+request) would slow the synchronizer the poster reads; and whoever runs the
+synchronizer sees which items a prover asks about.
 
 ## Measured (2026-11-09, m7i.large)
 

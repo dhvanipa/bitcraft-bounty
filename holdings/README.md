@@ -84,14 +84,15 @@ builds it inside a clone of the game's workspace at `616e0eb`
 is not changed.
 
 ```bash
-holdings prove --player NAME --sync http://127.0.0.1:3000 --out proof.json ~/.bitcraft/objects/bitcraft__emerald_*.dobj
+holdings prove --player NAME --out proof.json ~/.bitcraft/objects/bitcraft__emerald_*.dobj
 ```
 
 proves every item that is live at the synchronizer's head (or at execution
 block `--block N`), and skips, with a note, those spent or not yet created
-there. `--sync` must be a synchronizer with the holdings witness endpoint: ours
-runs on a box ([../synchronizer/](../synchronizer/README.md)), reached through
-`ssh -L 3000:127.0.0.1:3000`. The hosted one has no such endpoint.
+there. The proofs come from a synchronizer with the holdings witness
+endpoint, by default ours at `https://synchronizer.don.pateldhvani.com`
+([../synchronizer/](../synchronizer/README.md#public-endpoints)); `--sync URL`
+names another. The hosted synchronizer has no such endpoint.
 
 ```bash
 holdings verify --pexe ~/.bitcraft/actions/bitcraft.pexe proof.json
@@ -206,7 +207,7 @@ as the contract reads it (and a recipient's, with `--recipient`), and each
 class's rule; with `--pexe` it checks the 27 class hashes against the plugin.
 
 ```bash
-holdings bounty-pod --sync http://127.0.0.1:3000 --block BLOCK \
+holdings bounty-pod --block BLOCK \
   --recipient 0xADDRESS --threshold 50000000 --out claim.json ITEM.dobj...
 ```
 

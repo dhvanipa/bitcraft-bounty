@@ -52,8 +52,14 @@ mod live;
 const INVENTORY_VALUES: &str = include_str!("../../../apps/bitcraft/ui/inventory-values.json");
 /// 2: one state root for every claim, and no public nullifiers (2026-11-09).
 const FILE_VERSION: u32 = 2;
-/// Where `verify` checks state roots; it needs only `/v1/state/by_el`.
+/// Where `verify` checks state roots; it needs only `/v1/state/by_el`. The
+/// hosted synchronizer, so that a verifier needn't trust the one the prover
+/// used.
 const DEFAULT_SYNC: &str = "https://synchronizer.digiobjects.net";
+/// Where `prove`, `onchain-pod` and `bounty-pod` get their witness: our
+/// synchronizer with the holdings witness endpoint (synchronizer/), public
+/// since 2026-11-09. It sees which items a prover asks about.
+const WITNESS_SYNC: &str = "https://synchronizer.don.pateldhvani.com";
 /// Items per MainPod: a pod exposes at most 24 public statements, and the
 /// prover splits each chunk's private work across inner pods.
 const DEFAULT_CHUNK: usize = 9;
@@ -68,10 +74,10 @@ fn usage() -> ! {
     eprintln!(
         "usage:
   holdings classes --pexe BITCRAFT.pexe
-  holdings prove --player NAME --sync URL [--block N] --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
+  holdings prove --player NAME [--sync URL] [--block N] --out PROOF.json [--chunk N] [--mock] ITEM.dobj...
   holdings verify --pexe BITCRAFT.pexe [--sync URL | --offline] PROOF.json
-  holdings onchain-pod --sync URL [--block N] --out POD.json ITEM.dobj
-  holdings bounty-pod --sync URL [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json [--all] [--mock] ITEM.dobj...
+  holdings onchain-pod [--sync URL] [--block N] --out POD.json ITEM.dobj
+  holdings bounty-pod [--sync URL] [--block N] --recipient 0xADDRESS --threshold BIT --out POD.json [--all] [--mock] ITEM.dobj...
   holdings bounty-info --threshold BIT [--recipient 0xADDRESS] [--pexe BITCRAFT.pexe]"
     );
     std::process::exit(2)
@@ -98,6 +104,7 @@ fn main() -> Result<()> {
         }
     }
     let flag = |name: &str| flags.get(name).cloned().unwrap_or_else(|| usage());
+    let witness_sync = flags.get("--sync").cloned().unwrap_or(WITNESS_SYNC.into());
     // the state to prove against: an execution block's, or the head's
     let block: Option<i64> = flags
         .get("--block")
@@ -113,7 +120,7 @@ fn main() -> Result<()> {
             };
             prove(
                 &flag("--player"),
-                &flag("--sync"),
+                &witness_sync,
                 block,
                 Path::new(&flag("--out")),
                 &paths,
@@ -129,13 +136,13 @@ fn main() -> Result<()> {
         }
         "onchain-pod" => {
             ensure!(paths.len() == 1, "onchain-pod takes one item file");
-            onchain_pod(&flag("--sync"), block, Path::new(&flag("--out")), &paths[0])
+            onchain_pod(&witness_sync, block, Path::new(&flag("--out")), &paths[0])
         }
         "bounty-pod" => {
             ensure!(!paths.is_empty(), "no item files given");
             let threshold = centi_bit(&flag("--threshold"))?;
             bounty_pod(
-                &flag("--sync"),
+                &witness_sync,
                 block,
                 &flag("--recipient"),
                 threshold,

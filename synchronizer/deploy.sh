@@ -28,6 +28,6 @@ if [ -n "${RPC_FROM:-}" ]; then
     "${ssh[@]}" 'umask 077 && cat > ~/sync-build/rpc_url && echo "RPC URL copied: $(wc -c < ~/sync-build/rpc_url) bytes"'
 fi
 git -C "$game" archive --format=tar --prefix=src/ "$commit" | "${ssh[@]}" 'tar x -C ~/sync-build'
-scp -q -i "$key" -r "$here/install.sh" "$here/install-poster.sh" "$here/post-root.sh" "$here/patches" "$host:sync-build/deploy/"
+scp -q -i "$key" -r "$here/install.sh" "$here/install-poster.sh" "$here/install-proxy.sh" "$here/post-root.sh" "$here/patches" "$host:sync-build/deploy/"
 "${ssh[@]}" 'nohup bash ~/sync-build/deploy/install.sh > ~/sync-build/install.log 2>&1 < /dev/null &'
 echo "installing on $host; follow it with: ssh -i $key $host tail -f sync-build/install.log"
