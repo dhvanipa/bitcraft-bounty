@@ -58,6 +58,8 @@ a:hover { color: var(--ok); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 
 code, pre, .hash { font-family: var(--mono); font-size: 0.84em; }
+/* inline file names and addresses may break anywhere on a narrow screen */
+p code, li code { overflow-wrap: anywhere; }
 
 h1, h2, h3 { font-family: var(--sans); line-height: 1.12; margin: 0; }
 h2 {
