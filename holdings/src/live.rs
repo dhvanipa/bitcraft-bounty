@@ -145,7 +145,7 @@ pub fn fetch_witness(sync: &str, block_number: Option<i64>, objects: &[Dictionar
             if status == reqwest::StatusCode::NOT_FOUND && body.is_empty() {
                 bail!(
                     "{sync} has no /v1/holdings/witness: prove against a synchronizer with \
-                     bitcraft-leaderboard's patch (synchronizer/)"
+                     bitcraft-bounty's patch (synchronizer/)"
                 );
             }
             bail!("{url} answered {status}: {body}");

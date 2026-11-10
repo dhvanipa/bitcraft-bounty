@@ -73,7 +73,7 @@ horizontal scroll.
 
 ## Serving it
 
-The page is live at <https://dhvanipa.github.io/bitcraft-leaderboard/>.
+The page is live at <https://dhvanipa.github.io/bitcraft-bounty/>.
 [pages.yml](../.github/workflows/pages.yml) publishes `site/` as it is to
 GitHub Pages on every push to `main` that changes it.
 

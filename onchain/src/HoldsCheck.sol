@@ -12,7 +12,7 @@ interface IGroth16Verifier {
     ) external view;
 }
 
-/// Checks a wrapped `Holds(state_root, type, tag)` claim (bitcraft-leaderboard's
+/// Checks a wrapped `Holds(state_root, type, tag)` claim (bitcraft-bounty's
 /// holdings.podlang) against the game state roots its owner posts: the
 /// prover holds an item of class `type`, created and unspent at that root.
 /// The item's nullifier stays private; `tag` is the same for every state of

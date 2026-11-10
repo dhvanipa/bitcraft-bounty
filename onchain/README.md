@@ -172,7 +172,7 @@ deadline, and not after a claim.
 `src/Verifier.sol` holds the verifying key of one setup, run on 2026-11-09.
 A proof made with any other proving key fails it, so every claim needs that
 setup's proving key: the release
-[groth16-setup-1](https://github.com/dhvanipa/bitcraft-leaderboard/releases/tag/groth16-setup-1)
+[groth16-setup-1](https://github.com/dhvanipa/bitcraft-bounty/releases/tag/groth16-setup-1)
 has `r1cs` (322 MB), `proving.key` (1.36 GB) and `verifying.key`, which
 pod2-onchain's prover reads from its output folder.
 [groth16-setup.sha256](groth16-setup.sha256) has their SHA-256 sums:
@@ -180,7 +180,7 @@ pod2-onchain's prover reads from its output folder.
 ```bash
 mkdir groth && cd groth
 for f in r1cs proving.key verifying.key; do
-  curl -fLO https://github.com/dhvanipa/bitcraft-leaderboard/releases/download/groth16-setup-1/$f
+  curl -fLO https://github.com/dhvanipa/bitcraft-bounty/releases/download/groth16-setup-1/$f
 done
 shasum -a 256 -c ../onchain/groth16-setup.sha256
 ```

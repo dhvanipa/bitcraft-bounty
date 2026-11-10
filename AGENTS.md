@@ -7,7 +7,7 @@ Each folder's README explains its choices with the measurements behind them.
 ## Parts of this are live
 
 - **The bounty page** is published from `main`: a push that changes `site/`
-  goes live at <https://dhvanipa.github.io/bitcraft-leaderboard/> within a
+  goes live at <https://dhvanipa.github.io/bitcraft-bounty/> within a
   minute or two ([pages.yml](.github/workflows/pages.yml)).
 - **The bounty contract on Sepolia** is immutable. It pins the `BountyClaim`
   predicate's hash, the threshold and the Groth16 verifier at deployment, so
@@ -56,6 +56,11 @@ Each folder's README explains its choices with the measurements behind them.
   (`setup.files`) and the `groth16-setup-1` release all belong to one setup.
   Never re-run the setup for this verifier: a new one invalidates all of them
   and every deployed verifier.
+- **The deployed contracts' source.** `onchain/src/BountyEscrow.sol` and
+  `Verifier.sol` are exactly what was deployed and verified on Sourcify
+  (`exact_match`), and the compiler's metadata hash covers comments. Leave
+  them as they are, comments included (`BountyEscrow.sol` still names the
+  repository's old name), unless you are making a new deployment.
 - **The contract's ABI and the page.** `site/chain.js` hard-codes selectors
   (`cast sig`) and event topics (`cast keccak`). Recompute them after changing
   a function or event the page uses; `site/test.mjs` checks the claim's

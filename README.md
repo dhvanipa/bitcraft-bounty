@@ -1,49 +1,53 @@
-# bitcraft-leaderboard
+# bitcraft-bounty
 
-Zero-knowledge proofs of what a player holds in
-[Bitcraft](https://github.com/0xPARC/digital-objects-network), the crafting
-game on the Digital Objects Network, and a Sepolia bounty that pays for one.
+A bounty for [Bitcraft](https://github.com/0xPARC/digital-objects-network),
+the crafting game on the Digital Objects Network, paid only for a
+zero-knowledge proof.
 
-A player proves which items they hold, unspent, at a recent state of the
-game, without showing the items or anything that would let someone watch for
-them being spent. Anyone can check the proof against the chain. Two things
-use it:
+A contract on Sepolia pays its USDC to the first player who proves they hold
+unspent items worth at least 50,000,000 BIT, counted as the Bitcraft app
+counts them, at a state of the game posted in the last 24 hours. The proof
+shows that the total clears the bar and who gets paid. It doesn't show which
+items or how many, or anything that would let someone watch for them being
+spent. Anyone can check it against the chain.
 
-- **A leaderboard whose scores are proofs.** `holdings prove` proves a
-  player's items one by one; `holdings verify` checks them against the chain.
-- **A bounty.** `BountyEscrow`, on Sepolia, pays its USDC balance to the first
-  proof of unspent items worth at least 50,000,000 BIT, counted as the
-  Bitcraft app counts them, at a state root posted in the last 24 hours.
-  [The bounty page](https://dhvanipa.github.io/bitcraft-leaderboard/)
-  ([site/](site/)) shows whether it is open, which roots a claim can use, how
-  to claim, and checks a claim before it is sent.
+**[The bounty page](https://dhvanipa.github.io/bitcraft-bounty/)** shows
+whether the bounty is open and which states a claim can use, walks a claimant
+from their item files to a sent claim, and checks a claim before it is sent.
 
-Status: a working prototype on Sepolia testnet, tested on real items on
-2026-11-09 and 2026-11-10. The bounty is deployed at
+Status: a working prototype on Sepolia testnet. The bounty is deployed at
 [`0x91d3219a384ab57262287fFc9d11b96cE7d1d434`](https://sepolia.etherscan.io/address/0x91d3219a384ab57262287fFc9d11b96cE7d1d434),
 open until 2027-01-09. The first real claim was paid on Sepolia on
 2026-11-10, against a 2,000,000 BIT test bounty
-([onchain/README.md](onchain/README.md#the-first-claim-paid-on-sepolia-2026-11-10)). It is not ready for real money: see
+([onchain/README.md](onchain/README.md#the-first-claim-paid-on-sepolia-2026-11-10)).
+It is not ready for real money: see
 [what you have to trust](onchain/README.md#not-for-real-money-yet).
 
-## Why
+## Why proofs
 
-Bitcraft's current leaderboard is a Discord bot. It reads the Total Inventory
+Bitcraft's leaderboard today is a Discord bot. It reads the Total Inventory
 Value that the Bitcraft app shares as a Discord presence, and keeps each
-player's highest. Its README says the scores are not verified: anyone can share
-a presence as the Bitcraft application, since its ID is public. Players can't
-prove a score by uploading their item files instead, because whoever has an
-item's file can spend the item.
+player's highest. Its README says the scores are not verified: anyone can
+share a presence as the Bitcraft application, since its ID is public. Players
+can't prove a score by uploading their item files instead, because whoever
+has an item's file can spend the item.
 
-Here a player proves which items they hold with a zero-knowledge proof that
-shows nothing else: that each item was made by a valid transaction, which
-class it is, and that it has not been spent at a given state of the chain.
+Here a player proves what they hold with a zero-knowledge proof that shows
+nothing else: that each item was made by a valid transaction, which class it
+is, what the app counts it as, and that it has not been spent at a given state
+of the chain. The prover, `holdings`, makes the bounty's claims. It also
+proves a player's items one by one (`holdings prove`, checked by `holdings
+verify`), which is what a leaderboard whose scores are proofs would take. That
+leaderboard, a site that takes proofs, counts each item once across players
+and ranks them, is not built;
+[holdings/README.md](holdings/README.md#what-a-leaderboard-still-needs) lists
+what it needs.
 
 ## Layout
 
 | Folder | What |
 |---|---|
-| [holdings/](holdings/README.md) | the prover and verifier (`holdings prove`, `verify`, `bounty-pod`), and the pod2 predicates they prove: [holdings.podlang](holdings/src/holdings.podlang), generic to any Digital Objects app, and the bounty's [bounty.podlang](holdings/src/bounty.podlang) |
+| [holdings/](holdings/README.md) | the prover and verifier, `holdings` (`bounty-pod` for a bounty claim; `prove` and `verify` for a player's items), and the pod2 predicates they prove: [holdings.podlang](holdings/src/holdings.podlang), generic to any Digital Objects app, and the bounty's [bounty.podlang](holdings/src/bounty.podlang) |
 | [onchain/](onchain/README.md) | the contracts: proofs wrapped in Groth16 with pod2-onchain and verified in Solidity for about 545,000 gas; `HoldsCheck` for one item, and `BountyEscrow` |
 | [synchronizer/](synchronizer/README.md) | our run of the game's synchronizer and archiver, patched to prove an item unspent at a past state, public at `synchronizer.don.pateldhvani.com` and `archiver.don.pateldhvani.com`; and the hourly poster of finalized state roots to the bounty |
 | [site/](site/README.md) | the bounty page: static HTML and JavaScript with no build step, reading the contract from a public Sepolia node |
