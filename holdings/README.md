@@ -89,7 +89,10 @@ holdings prove --player NAME --out proof.json ~/.bitcraft/objects/bitcraft__emer
 
 proves every item that is live at the synchronizer's head (or at execution
 block `--block N`), and skips, with a note, those spent or not yet created
-there. The proofs come from a synchronizer with the holdings witness
+there. A whole objects folder can be given: files that aren't Bitcraft item
+files are skipped with one line. On 2026-11-10 a Mac app's folder held 89
+files from before the current network started on 2026-11-02, saved in an
+older layout with no `metadata`; they can't be live now. The proofs come from a synchronizer with the holdings witness
 endpoint, by default ours at `https://synchronizer.don.pateldhvani.com`
 ([../synchronizer/](../synchronizer/README.md#public-endpoints)); `--sync URL`
 names another. The hosted synchronizer has no such endpoint.
@@ -216,8 +219,8 @@ execution block `BLOCK` (a block whose root the contract holds:
 `rootBlock(root)`). It needs a synchronizer with the witness endpoint
 ([../synchronizer/](../synchronizer/README.md)), which gives each item's
 creation proof and nullifier absence proof at that block; the hosted
-synchronizer has none. It skips, with a note, items spent or not yet created
-there and items worth nothing, keeps one file per object (copies share a
+synchronizer has none. It skips files that aren't Bitcraft item files, and,
+with a note, items spent or not yet created there and items worth nothing, keeps one file per object (copies share a
 tag), and then claims only the fewest items that reach the threshold, most
 valuable first; `--all` claims every item instead. It prints the claim by
 class, and refuses a total below the threshold.
